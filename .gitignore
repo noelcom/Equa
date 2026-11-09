@@ -1,0 +1,5 @@
+# Lokala testdata (fiktiva CV:n). Ska aldrig checkas in.
+testdata/
+.env
+.env.*
+!.env.example
