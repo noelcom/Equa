@@ -2,7 +2,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from equa_backend.config import get_settings
-from equa_backend.routes import me
+from equa_backend.routes import analyses, me
 
 
 def create_app() -> FastAPI:
@@ -14,6 +14,7 @@ def create_app() -> FastAPI:
         allow_headers=["Authorization", "Content-Type"],
     )
     app.include_router(me.router)
+    app.include_router(analyses.router)
     return app
 
 

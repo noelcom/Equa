@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import type { Session } from "@supabase/supabase-js";
 import { getMe, type Me } from "@/lib/api";
 import { supabase } from "@/lib/supabase";
+import { Analyses } from "./analyses";
 
 export default function Home() {
   const [session, setSession] = useState<Session | null>(null);
@@ -20,7 +21,7 @@ export default function Home() {
 
   if (!ready) return null;
   return (
-    <main className="mx-auto flex min-h-screen max-w-md flex-col justify-center gap-6 p-6">
+    <main className="mx-auto flex min-h-screen max-w-xl flex-col justify-center gap-6 p-6">
       <h1 className="text-3xl font-semibold">Equa</h1>
       {session ? <Profile email={session.user.email ?? ""} /> : <Login />}
     </main>
@@ -87,6 +88,7 @@ function Profile({ email }: { email: string }) {
           </p>
         </div>
       )}
+      {me && <Analyses me={me} />}
       <button onClick={() => supabase.auth.signOut()} className="self-start text-sm underline">
         Logga ut
       </button>

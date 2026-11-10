@@ -62,6 +62,17 @@ def make_user(admin: Client):
 
     yield _make
     for user_id in created:
+        # Databasraderna försvinner via cascade, men filerna i storage måste städas separat.
+        analyses = (
+            admin.table("analysis_batches")
+            .select("candidates(original_path)")
+            .eq("user_id", user_id)
+            .execute()
+            .data
+        )
+        paths = [c["original_path"] for a in analyses for c in a["candidates"]]
+        if paths:
+            admin.storage.from_("originals").remove(paths)
         admin.auth.admin.delete_user(user_id)
 
 
