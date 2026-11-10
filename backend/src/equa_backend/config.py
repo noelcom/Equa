@@ -13,6 +13,8 @@ class Settings(BaseSettings):
     supabase_anon_key: str
     supabase_service_role_key: str
     anthropic_api_key: str = ""
+    # Adresser som får anropa API:et från en webbläsare. Frontendens adress i drift läggs till här.
+    cors_origins: list[str] = ["http://localhost:3000"]
 
 
 @lru_cache
