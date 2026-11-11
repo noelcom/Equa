@@ -373,7 +373,7 @@ function RankedCandidate({
         <button
           onClick={() => {
             setError(null);
-            revealCandidate(analysisId, candidate.alias).catch((e: Error) => setError(e.message));
+            revealCandidate(analysisId, candidate.number).catch((e: Error) => setError(e.message));
           }}
           className="mt-3 rounded border border-zinc-300 px-3 py-1 text-sm"
         >

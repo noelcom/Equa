@@ -22,6 +22,7 @@ export type PipelineStep = "pre_wash" | "ai_wash" | "safety_check" | "assessment
 
 export type Candidate = {
   alias: string;
+  number: number;
   status: CandidateStatus;
   step: PipelineStep | null;
   assessment: Assessment | null;
@@ -93,8 +94,7 @@ export async function runAnalysis(id: string): Promise<Analysis> {
 }
 
 // Avslöja: laddar ner originalfilen för en kandidat. Loggas inte (ADR 0004).
-export async function revealCandidate(analysisId: string, alias: string): Promise<void> {
-  const number = alias.replace("Kandidat #", "");
+export async function revealCandidate(analysisId: string, number: number): Promise<void> {
   const res = await authedFetch(`/analyses/${analysisId}/candidates/${number}/original`);
   if (!res.ok) throw new Error(await errorMessage(res, "Kunde inte avslöja kandidaten"));
   const url = URL.createObjectURL(await res.blob());

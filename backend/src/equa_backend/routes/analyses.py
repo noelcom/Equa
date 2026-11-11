@@ -42,6 +42,8 @@ PDF_MAGIC = b"%PDF-"
 class CandidateOut(BaseModel):
     # Anonym alias. Originalfilnamn visas aldrig (ADR 0004).
     alias: str
+    # Löpnummer i analysen. Adresserar kandidaten, t.ex. vid avslöja.
+    number: int
     status: CandidateStatus
     # Aktuellt pipelinesteg medan kandidaten bearbetas.
     step: PipelineStep | None
@@ -99,6 +101,7 @@ def _candidate_out(c: Candidate) -> CandidateOut:
         )
     return CandidateOut(
         alias=_alias(c.number),
+        number=c.number,
         status=c.status,
         step=c.step,
         assessment=assessment,

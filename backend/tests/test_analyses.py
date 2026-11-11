@@ -129,3 +129,14 @@ def test_analyses_require_login(client):
     assert (
         client.post("/analyses", data={"title": "a", "job_ad": "b"}).status_code == 401
     )
+
+
+def test_candidates_expose_their_number_for_addressing(client, make_user):
+    user = make_user()
+
+    body = _create(client, user).json()
+
+    assert [(c["number"], c["alias"]) for c in body["candidates"]] == [
+        (1, "Kandidat #1"),
+        (2, "Kandidat #2"),
+    ]
