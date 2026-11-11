@@ -103,6 +103,12 @@ def _with_retry(settings: Settings, call):
             if not _is_transient(e):
                 raise
             if attempt == settings.anthropic_max_attempts:
+                log.error(
+                    "Anthropic otillgängligt efter %d försök: %s (status %s)",
+                    attempt,
+                    type(e).__name__,
+                    getattr(e, "status_code", None),
+                )
                 raise PipelineError(TRANSIENT_REASON) from None
             time.sleep(settings.anthropic_retry_backoff_seconds * 2 ** (attempt - 1))
 

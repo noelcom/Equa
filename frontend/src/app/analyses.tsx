@@ -14,6 +14,9 @@ import {
 } from "@/lib/api";
 
 const POLL_MS = 2000;
+// Backend tar om CV:n som stått som pågående längre än så (stale_cv_minutes, 15 min).
+// Först därefter kan en ny körning faktiskt rädda ett fastnat CV.
+const STALL_MS = 15 * 60 * 1000 + 30_000;
 
 const STEP_LABEL: Record<PipelineStep, string> = {
   pre_wash: "Förtvättar",
@@ -247,6 +250,18 @@ function AnalysisView({
   const failed = analysis.candidates.filter((c) => c.status === "failed");
   const { total, finished } = analysis.progress;
 
+  // Om ingen framgång syns på länge antas en körning ha fastnat, och användaren kan ta om den.
+  // Nyckeln byts när framgången ändras, så ett gammalt "fastnat" försvinner av sig självt.
+  const [stalledKey, setStalledKey] = useState<string | null>(null);
+  const running = analysis.state === "running";
+  const progressKey = `${analysis.id}:${finished}`;
+  useEffect(() => {
+    if (!running) return;
+    const timer = setTimeout(() => setStalledKey(progressKey), STALL_MS);
+    return () => clearTimeout(timer);
+  }, [running, progressKey]);
+  const stalled = running && stalledKey === progressKey;
+
   return (
     <div className="flex flex-col gap-3">
       <button onClick={onBack} className="self-start text-sm underline">
@@ -266,6 +281,16 @@ function AnalysisView({
             Analyserar… {finished} av {total} CV:n klara
           </p>
           <progress value={finished} max={total} className="w-full" />
+          {stalled && (
+            <div className="flex flex-col gap-1">
+              <p className="text-sm text-zinc-600">
+                Det verkar ha hakat upp sig. Du kan ta om de CV:n som inte blev klara.
+              </p>
+              <button onClick={onRun} className="self-start rounded bg-black px-4 py-2 text-white">
+                Ta om fastnade CV:n
+              </button>
+            </div>
+          )}
         </div>
       )}
 
