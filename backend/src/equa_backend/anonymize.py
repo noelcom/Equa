@@ -28,11 +28,12 @@ _PATTERNS = [
         r"\.com\S*",
         re.IGNORECASE,
     ),
-    # Telefonnummer: internationella (+46 70 123 45 67) och svenska (070-123 45 67).
-    # Kräver att numret inte följer på en siffra, punkt eller bindestreck, så att
-    # årsintervall som "2018-2021" lämnas ifred.
-    re.compile(r"(?<![\w.\-])\+\d(?:[ \-]?\(?\d\)?){7,13}"),
-    re.compile(r"(?<![\w.\-])0\d(?:[ \-]?\d){7,9}(?!\d)"),
+    # Telefonnummer: internationella (+46 70 123 45 67, 0046 70 ..., +46 (0)70 ...) och
+    # svenska (070-123 45 67, 070 - 123 45 67, (070) 123 45 67). Kräver att numret inte
+    # följer på en siffra, punkt eller bindestreck, så att årsintervall som
+    # "2018-2021" lämnas ifred.
+    re.compile(r"(?<![\w.\-])(?:\+|00)\d(?:[ \-]*[()]?\d[()]?){7,13}(?!\d)"),
+    re.compile(r"(?<![\w.\-])\(?0(?:\)?[ \-]*\d){8,10}(?!\d)"),
 ]
 
 

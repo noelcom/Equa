@@ -5,7 +5,9 @@ texten finns bara i minnet under körningen och sparas aldrig (ADR 0004).
 """
 
 import logging
+import time
 from concurrent.futures import ThreadPoolExecutor
+from datetime import UTC, datetime
 
 import anthropic
 from pydantic import BaseModel, Field, ValidationError
@@ -78,54 +80,89 @@ class PipelineError(Exception):
 
 
 def _set(supabase: Client, candidate_id: str, **fields) -> None:
+    # claimed_at är en hjärtslagsstämpel: den visar att CV:t fortfarande arbetas på.
+    fields["claimed_at"] = datetime.now(UTC).isoformat()
     supabase.table("candidates").update(fields).eq("id", candidate_id).execute()
 
 
+TRANSIENT_REASON = "AI-tjänsten var tillfälligt otillgänglig. Försök igen senare."
+
+
+def _is_transient(e: Exception) -> bool:
+    if isinstance(e, anthropic.APIStatusError):
+        return e.status_code in (408, 409, 429) or e.status_code >= 500
+    return isinstance(e, anthropic.APIConnectionError)  # inkl. timeout
+
+
+def _with_retry(settings: Settings, call):
+    """Kör ett Anthropic-anrop och provar om tillfälliga fel med växande väntetid."""
+    for attempt in range(1, settings.anthropic_max_attempts + 1):
+        try:
+            return call()
+        except anthropic.APIError as e:
+            if not _is_transient(e):
+                raise
+            if attempt == settings.anthropic_max_attempts:
+                raise PipelineError(TRANSIENT_REASON) from None
+            time.sleep(settings.anthropic_retry_backoff_seconds * 2 ** (attempt - 1))
+
+
 def _wash(client: anthropic.Anthropic, settings: Settings, text: str) -> str:
-    response = client.messages.create(
-        model=settings.wash_model,
-        max_tokens=8192,
-        system=WASH_INSTRUCTION,
-        messages=[{"role": "user", "content": text}],
+    response = _with_retry(
+        settings,
+        lambda: client.messages.create(
+            model=settings.wash_model,
+            max_tokens=8192,
+            system=WASH_INSTRUCTION,
+            messages=[{"role": "user", "content": text}],
+        ),
     )
     if getattr(response, "stop_reason", None) == "max_tokens":
         # Ett avklippt CV skulle ge en orättvist låg poäng.
         raise PipelineError("CV:t var för långt för att anonymiseras.")
-    return "".join(b.text for b in response.content if b.type == "text")
+    washed = "".join(b.text for b in response.content if b.type == "text")
+    if getattr(response, "stop_reason", None) == "refusal" or not washed.strip():
+        # Ett tomt svar eller en vägran får aldrig matas vidare: en tom text skulle
+        # ge en missvisande låg poäng i stället för "kunde inte analyseras".
+        raise PipelineError("Kunde inte anonymiseras säkert.")
+    return washed
 
 
 def _assess(
     client: anthropic.Anthropic, settings: Settings, job_ad: str, washed: str
 ) -> Assessment:
     try:
-        response = client.messages.parse(
-            model=settings.assessment_model,
-            max_tokens=2000,
-            system=[
-                {
-                    "type": "text",
-                    "text": ASSESSMENT_INSTRUCTION,
-                    "cache_control": {"type": "ephemeral"},
-                }
-            ],
-            messages=[
-                {
-                    "role": "user",
-                    "content": [
-                        # Annonsen är gemensam för alla CV:n i analysen och cachas.
-                        {
-                            "type": "text",
-                            "text": f"ARBETSANNONS:\n{job_ad}",
-                            "cache_control": {"type": "ephemeral"},
-                        },
-                        {
-                            "type": "text",
-                            "text": f"KANDIDATENS ANONYMISERADE CV:\n{washed}",
-                        },
-                    ],
-                }
-            ],
-            output_format=Assessment,
+        response = _with_retry(
+            settings,
+            lambda: client.messages.parse(
+                model=settings.assessment_model,
+                max_tokens=2000,
+                system=[
+                    {
+                        "type": "text",
+                        "text": ASSESSMENT_INSTRUCTION,
+                        "cache_control": {"type": "ephemeral"},
+                    }
+                ],
+                messages=[
+                    {
+                        "role": "user",
+                        "content": [
+                            # Annonsen är gemensam för alla CV:n i analysen och cachas.
+                            {
+                                "type": "text",
+                                "text": f"ARBETSANNONS:\n{job_ad}",
+                                "cache_control": {"type": "ephemeral"},
+                            },
+                            {
+                                "type": "text",
+                                "text": f"KANDIDATENS ANONYMISERADE CV:\n{washed}",
+                            },
+                        ],
+                    }
+                ],
+                output_format=Assessment,
+            ),
         )
     except ValidationError:
         # AI-svaret följde inte schemat. Aldrig poäng 0: CV:t blir "kunde inte analyseras".

@@ -19,7 +19,8 @@ def get_supabase() -> Client:
 
 def get_anthropic_client() -> anthropic.Anthropic:
     """Enda externa gränsen utöver Supabase. Ersätts av en fejk i testerna."""
-    return anthropic.Anthropic(api_key=get_settings().anthropic_api_key)
+    # Omförsöken sköts av pipelinen (med tydlig orsak vid slutligt fel), inte av SDK:t.
+    return anthropic.Anthropic(api_key=get_settings().anthropic_api_key, max_retries=0)
 
 
 @dataclass(frozen=True)

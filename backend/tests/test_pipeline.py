@@ -330,3 +330,166 @@ def test_wash_uses_haiku_assessment_uses_sonnet_and_shared_prompt_is_cached(
         job_ad, cv_text = kw["messages"][0]["content"]
         assert job_ad["cache_control"] == {"type": "ephemeral"}
         assert "cache_control" not in cv_text
+
+
+def test_empty_wash_answer_fails_the_cv_instead_of_scoring_it(
+    client, make_user, anthropic_fake
+):
+    # Haiku svarar tomt (t.ex. en vägran) för det första CV:t.
+    anthropic_fake.wash_override = lambda text: "" if "VÄGRAN" in text else text
+    user = make_user()
+    analysis = _analysis(
+        client,
+        user,
+        [
+            ("a.pdf", cv("VÄGRAN Utvecklare.\nPOÄNG 90")),
+            ("b.pdf", cv("Utvecklare.\nPOÄNG 60")),
+        ],
+    )
+
+    _run(client, user, analysis["id"])
+
+    body = _get(client, user, analysis["id"])
+    assert [c["alias"] for c in body["candidates"]] == ["Kandidat #2", "Kandidat #1"]
+    stopped = body["candidates"][1]
+    assert stopped["status"] == "failed"
+    assert stopped["assessment"] is None
+    assert "anonymiseras" in stopped["failure_reason"]
+    assert len(anthropic_fake.texts_sent("assess")) == 1
+
+
+PHONE_FORMATS = [
+    "070 - 123 45 67",
+    "(070) 123 45 67",
+    "0046 70 123 45 67",
+    "0046-70-123 45 67",
+    "+46 (0)70-123 45 67",
+]
+
+
+def test_phone_numbers_in_unusual_formats_never_reach_the_ai(
+    client, make_user, anthropic_fake
+):
+    user = make_user()
+    body = "\n".join(f"Ring {n}" for n in PHONE_FORMATS)
+    analysis = _analysis(
+        client, user, [("a.pdf", cv(f"{body}\nUtvecklare 2018-2021.\nPOÄNG 60"))]
+    )
+
+    _run(client, user, analysis["id"])
+
+    sent = anthropic_fake.texts_sent("wash")[0]
+    assert "123" not in sent and "45 67" not in sent
+    assert "2018-2021" in sent
+
+
+def test_safety_check_stops_unusual_phone_formats_left_by_the_ai_wash(
+    client, make_user, anthropic_fake
+):
+    anthropic_fake.wash_override = lambda text: text + "\nRing (070) 123 45 67"
+    user = make_user()
+    analysis = _analysis(client, user, [("a.pdf", cv("Utvecklare.\nPOÄNG 60"))])
+
+    _run(client, user, analysis["id"])
+
+    stopped = _get(client, user, analysis["id"])["candidates"][0]
+    assert stopped["status"] == "failed"
+    assert anthropic_fake.texts_sent("assess") == []
+
+
+def _status_error(cls, status_code):
+    import httpx
+
+    request = httpx.Request("POST", "https://api.anthropic.com/v1/messages")
+    return cls("fel", response=httpx.Response(status_code, request=request), body=None)
+
+
+def _flaky(anthropic_fake, kind, error, failures):
+    """Låter de första `failures` anropen av `kind` kasta `error`, därefter går de bra."""
+    real = getattr(anthropic_fake, "create" if kind == "wash" else "parse")
+    state = {"left": failures}
+
+    def wrapper(**kwargs):
+        if state["left"] > 0:
+            state["left"] -= 1
+            raise error
+        return real(**kwargs)
+
+    setattr(anthropic_fake, "create" if kind == "wash" else "parse", wrapper)
+
+
+def test_transient_anthropic_errors_are_retried_and_the_cv_still_gets_scored(
+    client, make_user, anthropic_fake
+):
+    import anthropic
+
+    _configure(client, anthropic_retry_backoff_seconds=0, anthropic_max_attempts=3)
+    _flaky(anthropic_fake, "wash", _status_error(anthropic.RateLimitError, 429), 1)
+    _flaky(
+        anthropic_fake, "assess", _status_error(anthropic.InternalServerError, 503), 2
+    )
+    user = make_user()
+    analysis = _analysis(client, user, [("a.pdf", cv("Utvecklare.\nPOÄNG 66"))])
+
+    _run(client, user, analysis["id"])
+
+    candidate = _get(client, user, analysis["id"])["candidates"][0]
+    assert candidate["status"] == "done"
+    assert candidate["assessment"]["score"] == 66
+
+
+def test_anthropic_outage_that_outlasts_the_retries_gets_a_clear_reason(
+    client, make_user, anthropic_fake
+):
+    import anthropic
+    import httpx
+
+    _configure(client, anthropic_retry_backoff_seconds=0, anthropic_max_attempts=2)
+    error = anthropic.APITimeoutError(
+        httpx.Request("POST", "https://api.anthropic.com/v1/messages")
+    )
+    _flaky(anthropic_fake, "wash", error, 99)
+    user = make_user()
+    analysis = _analysis(client, user, [("a.pdf", cv("Utvecklare.\nPOÄNG 66"))])
+
+    _run(client, user, analysis["id"])
+
+    candidate = _get(client, user, analysis["id"])["candidates"][0]
+    assert candidate["status"] == "failed"
+    assert "tillfälligt" in candidate["failure_reason"]
+
+
+def _stick(admin, analysis_id, status, minutes_ago):
+    """Simulerar ett CV som fastnat: en körning som dog innan CV:t blev klart."""
+    from datetime import UTC, datetime, timedelta
+
+    claimed_at = datetime.now(UTC) - timedelta(minutes=minutes_ago)
+    admin.table("candidates").update(
+        {"status": status, "claimed_at": claimed_at.isoformat()}
+    ).eq("analysis_id", analysis_id).execute()
+
+
+def test_cv_stuck_in_progress_is_picked_up_again_by_run(
+    client, make_user, anthropic_fake, admin
+):
+    user = make_user()
+    analysis = _analysis(client, user, [("a.pdf", cv("Utvecklare.\nPOÄNG 70"))])
+    _stick(admin, analysis["id"], "processing", minutes_ago=60)
+    assert _get(client, user, analysis["id"])["state"] == "running"
+
+    assert _run(client, user, analysis["id"]).status_code == 202
+
+    candidate = _get(client, user, analysis["id"])["candidates"][0]
+    assert candidate["status"] == "done"
+    assert candidate["assessment"]["score"] == 70
+
+
+def test_cv_that_was_just_started_is_not_run_twice(
+    client, make_user, anthropic_fake, admin
+):
+    user = make_user()
+    analysis = _analysis(client, user, [("a.pdf", cv("Utvecklare.\nPOÄNG 70"))])
+    _stick(admin, analysis["id"], "queued", minutes_ago=1)
+
+    assert _run(client, user, analysis["id"]).status_code == 409
+    assert anthropic_fake.calls == []

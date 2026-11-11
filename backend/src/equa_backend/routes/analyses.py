@@ -23,11 +23,10 @@ from equa_backend.deps import (
     get_current_user,
     get_supabase,
 )
-from equa_backend.pipeline import Assessment
+from equa_backend.pipeline import BUCKET, Assessment
 
 router = APIRouter(prefix="/analyses")
 
-BUCKET = "originals"
 PDF_MAGIC = b"%PDF-"
 IN_FLIGHT = ("queued", "processing")
 
@@ -262,12 +261,26 @@ def run_analysis(
 ) -> AnalysisOut:
     """Startar pipelinen för analysens ännu ej körda CV:n. Resultatet hämtas via GET."""
     analysis = _own_analysis(supabase, user, analysis_id)
-    # Ett atomärt anspråk i databasen, så en dubbelklick inte kör samma CV två gånger.
+    # Atomära anspråk i databasen, så en dubbelklick inte kör samma CV två gånger.
+    # Anspråket stämplar claimed_at, så ett samtidigt anrop inte hittar CV:t som fastnat.
+    now = datetime.now(UTC)
+    claim = {"status": "queued", "step": None, "claimed_at": now.isoformat()}
+    cutoff = (now - timedelta(minutes=settings.stale_cv_minutes)).isoformat()
     claimed = (
         supabase.table("candidates")
-        .update({"status": "queued"})
+        .update(claim)
         .eq("analysis_id", str(analysis_id))
         .eq("status", "uploaded")
+        .execute()
+        .data
+    )
+    # Återhämtning: CV:n som fastnat (t.ex. efter en omstart mitt i en körning) tas om.
+    claimed += (
+        supabase.table("candidates")
+        .update(claim)
+        .eq("analysis_id", str(analysis_id))
+        .in_("status", list(IN_FLIGHT))
+        .or_(f"claimed_at.is.null,claimed_at.lt.{cutoff}")
         .execute()
         .data
     )
