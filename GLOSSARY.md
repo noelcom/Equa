@@ -42,7 +42,7 @@ Format: **Svensk term** (kodnamn) – definition. _Undvik:_ synonymer vi inte an
 
 **Kunde inte analyseras** (`failed`) – eget tillstånd för CV:n som inte kunde läsas (t.ex. inskannad bild), inte anonymiseras säkert (även när AI-tvätten ger tomt svar eller vägrar), inte tolkades eller inte kunde bedömas för att AI-tjänsten var tillfälligt otillgänglig efter flera försök. Aldrig poäng 0, och räknas inte mot kvoten.
 
-**Fastnat CV** – ett CV som stått som `queued`/`processing` längre än 15 minuter utan framsteg (`claimed_at`, en hjärtslagsstämpel som uppdateras vid varje steg). Rekryteraren kan ta om det via "Ta om fastnade CV:n" (`/run`).
+**Fastnat CV** – ett CV som stått som `queued`/`processing` längre än 15 minuter utan framsteg (`last_progress_at`, en hjärtslagsstämpel som uppdateras vid varje steg). Rekryteraren kan ta om det via "Ta om fastnade CV:n" (`/run`).
 
 ## Data och gränser
 

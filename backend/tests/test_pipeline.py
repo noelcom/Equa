@@ -463,9 +463,9 @@ def _stick(admin, analysis_id, status, minutes_ago):
     """Simulerar ett CV som fastnat: en körning som dog innan CV:t blev klart."""
     from datetime import UTC, datetime, timedelta
 
-    claimed_at = datetime.now(UTC) - timedelta(minutes=minutes_ago)
+    last_progress_at = datetime.now(UTC) - timedelta(minutes=minutes_ago)
     admin.table("candidates").update(
-        {"status": status, "claimed_at": claimed_at.isoformat()}
+        {"status": status, "last_progress_at": last_progress_at.isoformat()}
     ).eq("analysis_id", analysis_id).execute()
 
 

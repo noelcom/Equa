@@ -81,8 +81,8 @@ class PipelineError(Exception):
 
 
 def _set(supabase: Client, candidate_id: str, **fields) -> None:
-    # claimed_at är en hjärtslagsstämpel: den visar att CV:t fortfarande arbetas på.
-    fields["claimed_at"] = datetime.now(UTC).isoformat()
+    # last_progress_at är en hjärtslagsstämpel: den visar att CV:t fortfarande arbetas på.
+    fields["last_progress_at"] = datetime.now(UTC).isoformat()
     supabase.table("candidates").update(fields).eq("id", candidate_id).execute()
 
 

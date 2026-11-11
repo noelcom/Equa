@@ -274,9 +274,9 @@ def run_analysis(
     """Startar pipelinen för analysens ännu ej körda CV:n. Resultatet hämtas via GET."""
     analysis = _own_analysis(supabase, user, analysis_id)
     # Atomära anspråk i databasen, så en dubbelklick inte kör samma CV två gånger.
-    # Anspråket stämplar claimed_at, så ett samtidigt anrop inte hittar CV:t som fastnat.
+    # Anspråket stämplar last_progress_at, så ett samtidigt anrop inte hittar CV:t som fastnat.
     now = datetime.now(UTC)
-    claim = {"status": "queued", "step": None, "claimed_at": now.isoformat()}
+    claim = {"status": "queued", "step": None, "last_progress_at": now.isoformat()}
     cutoff = (now - timedelta(minutes=settings.stale_cv_minutes)).isoformat()
 
     def claim_rows():
@@ -291,7 +291,7 @@ def run_analysis(
     stuck = (
         claim_rows()
         .in_("status", list(IN_FLIGHT))
-        .or_(f"claimed_at.is.null,claimed_at.lt.{cutoff}")
+        .or_(f"last_progress_at.is.null,last_progress_at.lt.{cutoff}")
         .execute()
         .data
     )
