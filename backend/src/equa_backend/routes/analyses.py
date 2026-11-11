@@ -12,7 +12,9 @@ from fastapi import (
     UploadFile,
     status,
 )
+from fastapi.responses import Response
 from pydantic import BaseModel
+from storage3.exceptions import StorageException
 from supabase import Client
 
 from equa_backend import pipeline
@@ -314,6 +316,38 @@ def run_analysis(
         claimed,
     )
     return _to_out(analysis, candidates)
+
+
+@router.get("/{analysis_id}/candidates/{number}/original")
+def reveal_candidate(
+    analysis_id: uuid.UUID,
+    number: int,
+    user: Annotated[CurrentUser, Depends(get_current_user)],
+    supabase: Annotated[Client, Depends(get_supabase)],
+) -> Response:
+    """Avslöja: originalfilen för en kandidat. Det enda sättet identiteten visas.
+
+    Avslöjanden loggas medvetet inte (ADR 0004).
+    """
+    analysis = _own_analysis(supabase, user, analysis_id)
+    candidate = next(
+        (c for c in _candidates(analysis["candidates"]) if c.number == number), None
+    )
+    if candidate is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Kandidaten finns inte.")
+    try:
+        data = supabase.storage.from_(BUCKET).download(candidate.original_path)
+    except StorageException:
+        # Originalfilen kan redan ha raderats (raderingsdatum, ADR 0004).
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND, "Originalfilen finns inte längre."
+        ) from None
+    filename = f"Kandidat-{number}.pdf"
+    return Response(
+        content=data,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 def _own_analysis(supabase: Client, user: CurrentUser, analysis_id: uuid.UUID) -> dict:

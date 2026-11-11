@@ -92,6 +92,20 @@ export async function runAnalysis(id: string): Promise<Analysis> {
   return res.json();
 }
 
+// Avslöja: laddar ner originalfilen för en kandidat. Loggas inte (ADR 0004).
+export async function revealCandidate(analysisId: string, alias: string): Promise<void> {
+  const number = alias.replace("Kandidat #", "");
+  const res = await authedFetch(`/analyses/${analysisId}/candidates/${number}/original`);
+  if (!res.ok) throw new Error(await errorMessage(res, "Kunde inte avslöja kandidaten"));
+  const url = URL.createObjectURL(await res.blob());
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `Kandidat-${number}.pdf`;
+  a.click();
+  // Vänta lite så webbläsaren hinner starta nedladdningen innan URL:en släpps.
+  setTimeout(() => URL.revokeObjectURL(url), 10_000);
+}
+
 export async function createAnalysis(
   title: string,
   jobAd: string,

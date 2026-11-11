@@ -5,6 +5,7 @@ import {
   createAnalysis,
   getAnalysis,
   listAnalyses,
+  revealCandidate,
   runAnalysis,
   type Analysis,
   type AnalysisSummary,
@@ -302,7 +303,7 @@ function AnalysisView({
           </p>
           <ol className="flex flex-col gap-2">
             {ranked.map((c, i) => (
-              <RankedCandidate key={c.alias} candidate={c} rank={i + 1} />
+              <RankedCandidate key={c.alias} analysisId={analysis.id} candidate={c} rank={i + 1} />
             ))}
           </ol>
         </div>
@@ -340,8 +341,17 @@ function AnalysisView({
   );
 }
 
-function RankedCandidate({ candidate, rank }: { candidate: Candidate; rank: number }) {
+function RankedCandidate({
+  analysisId,
+  candidate,
+  rank,
+}: {
+  analysisId: string;
+  candidate: Candidate;
+  rank: number;
+}) {
   const a = candidate.assessment;
+  const [error, setError] = useState<string | null>(null);
   if (!a) return null;
   return (
     <li className="rounded border border-zinc-300 p-3">
@@ -360,6 +370,16 @@ function RankedCandidate({ candidate, rank }: { candidate: Candidate; rank: numb
           <Detail label="Saknade krav">{a.missing_requirements}</Detail>
           <Detail label="Motivering">{a.rationale}</Detail>
         </dl>
+        <button
+          onClick={() => {
+            setError(null);
+            revealCandidate(analysisId, candidate.alias).catch((e: Error) => setError(e.message));
+          }}
+          className="mt-3 rounded border border-zinc-300 px-3 py-1 text-sm"
+        >
+          Avslöja (ladda ner originalfil)
+        </button>
+        {error && <p className="mt-1 text-sm text-red-600">{error}</p>}
       </details>
     </li>
   );
