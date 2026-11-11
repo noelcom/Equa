@@ -255,3 +255,25 @@ def test_analysis_older_than_the_cap_can_be_extended_to_the_cap_from_today_but_n
     assert over.status_code == 422
     assert ok.status_code == 200
     assert abs(_days_left(ok.json()) - 89) < 0.01
+
+
+def test_the_cap_sits_at_exactly_90_days_from_today(client, make_user):
+    user = make_user()
+    analysis = _create(client, user).json()
+    url = f"/analyses/{analysis['id']}"
+
+    # En minut på var sida om gränsen: tillräckligt nära för att fånga fel som
+    # `> 89` eller `>= 90`, men med marginal för tiden testet och servern tar.
+    over = client.patch(
+        url,
+        headers=user.auth,
+        json={"expires_at": _in(days=90, minutes=1).isoformat()},
+    )
+    at_cap = client.patch(
+        url,
+        headers=user.auth,
+        json={"expires_at": _in(days=90, minutes=-1).isoformat()},
+    )
+
+    assert over.status_code == 422
+    assert at_cap.status_code == 200
