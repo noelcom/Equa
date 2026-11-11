@@ -16,6 +16,7 @@ import pytest
 from fastapi.testclient import TestClient
 from helpers import score_marker
 from supabase import Client, create_client
+from supabase_auth.errors import AuthApiError
 
 from equa_backend.app import create_app
 from equa_backend.config import get_settings
@@ -182,7 +183,10 @@ def make_user(admin: Client):
             admin.storage.from_("originals").remove(paths)
         # Användningsloggen är permanent och har ingen cascade, så testet städar den själv.
         admin.table("usage_logs").delete().eq("customer_id", user_id).execute()
-        admin.auth.admin.delete_user(user_id)
+        try:
+            admin.auth.admin.delete_user(user_id)
+        except AuthApiError:
+            pass  # Redan raderad av testet självt (kontoradering).
 
 
 @pytest.fixture
