@@ -55,7 +55,10 @@ async function authedFetch(path: string, init: RequestInit = {}): Promise<Respon
   const token = data.session?.access_token;
   return fetch(`${process.env.NEXT_PUBLIC_API_URL}${path}`, {
     ...init,
-    headers: token ? { Authorization: `Bearer ${token}` } : {},
+    headers: {
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      ...(init.headers as Record<string, string> | undefined),
+    },
   });
 }
 
@@ -110,12 +113,32 @@ export async function createAnalysis(
   title: string,
   jobAd: string,
   files: File[],
+  expiresAt: Date | null,
 ): Promise<Analysis> {
   const form = new FormData();
   form.append("title", title);
   form.append("job_ad", jobAd);
   for (const f of files) form.append("files", f);
+  // Utan datum använder backend profilens förval (7 dagar).
+  if (expiresAt) form.append("expires_at", expiresAt.toISOString());
   const res = await authedFetch("/analyses", { method: "POST", body: form });
   if (!res.ok) throw new Error(await errorMessage(res, "Kunde inte skapa analysen"));
   return res.json();
+}
+
+// Flyttar fram raderingsdatumet. Backend avvisar datum över taket.
+export async function extendAnalysis(id: string, expiresAt: Date): Promise<Analysis> {
+  const res = await authedFetch(`/analyses/${id}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ expires_at: expiresAt.toISOString() }),
+  });
+  if (!res.ok) throw new Error(await errorMessage(res, "Kunde inte flytta raderingsdatumet"));
+  return res.json();
+}
+
+// Radera direkt: analysen, kandidaterna och originalfilerna.
+export async function deleteAnalysis(id: string): Promise<void> {
+  const res = await authedFetch(`/analyses/${id}`, { method: "DELETE" });
+  if (!res.ok) throw new Error(await errorMessage(res, "Kunde inte radera analysen"));
 }

@@ -3,6 +3,8 @@
 import { useCallback, useEffect, useState } from "react";
 import {
   createAnalysis,
+  deleteAnalysis,
+  extendAnalysis,
   getAnalysis,
   listAnalyses,
   revealCandidate,
@@ -103,6 +105,27 @@ export function Analyses({ me }: { me: Me }) {
     return () => clearInterval(timer);
   }, [runningId]);
 
+  async function extend(id: string, date: Date) {
+    setError(null);
+    try {
+      setSelected(await extendAnalysis(id, date));
+      void refresh();
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  }
+
+  async function remove(id: string) {
+    setError(null);
+    try {
+      await deleteAnalysis(id);
+      await open(null);
+      await refresh();
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  }
+
   async function startRun(id: string) {
     setError(null);
     try {
@@ -120,6 +143,9 @@ export function Analyses({ me }: { me: Me }) {
           analysis={selected}
           onBack={() => void open(null)}
           onRun={() => void startRun(selected.id)}
+          maxRetentionDays={me.max_retention_days}
+          onExtend={(d) => void extend(selected.id, d)}
+          onDelete={() => void remove(selected.id)}
         />
       ) : (
         <>
@@ -142,6 +168,9 @@ function NewAnalysis({ me, onCreated }: { me: Me; onCreated: (a: Analysis) => vo
   const [title, setTitle] = useState("");
   const [jobAd, setJobAd] = useState("");
   const [files, setFiles] = useState<File[]>([]);
+  const [retention, setRetention] = useState<string>("default");
+  const [customDate, setCustomDate] = useState("");
+  const [mountedAt] = useState(() => Date.now());
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -156,9 +185,15 @@ function NewAnalysis({ me, onCreated }: { me: Me; onCreated: (a: Analysis) => vo
       );
       return;
     }
+    let expiresAt: Date | null = null;
+    if (retention === "custom") {
+      expiresAt = endOfDay(customDate);
+    } else if (retention !== "default") {
+      expiresAt = new Date(Date.now() + Number(retention) * 3600 * 1000);
+    }
     setBusy(true);
     try {
-      onCreated(await createAnalysis(title, jobAd, files));
+      onCreated(await createAnalysis(title, jobAd, files, expiresAt));
     } catch (err) {
       setError((err as Error).message);
     } finally {
@@ -194,8 +229,33 @@ function NewAnalysis({ me, onCreated }: { me: Me; onCreated: (a: Analysis) => vo
           onChange={(e) => setFiles(Array.from(e.target.files ?? []))}
         />
       </label>
+      <label className="flex flex-col gap-1 text-sm">
+        Raderingsdatum
+        <select
+          value={retention}
+          onChange={(e) => setRetention(e.target.value)}
+          className="rounded border border-zinc-300 p-2"
+        >
+          <option value="24">24 timmar</option>
+          <option value="default">{me.default_retention_days} dagar (förval)</option>
+          <option value="336">14 dagar</option>
+          <option value="custom">Eget datum</option>
+        </select>
+      </label>
+      {retention === "custom" && (
+        <input
+          type="date"
+          required
+          value={customDate}
+          min={dateInput(new Date(mountedAt + 24 * 3600 * 1000))}
+          max={dateInput(new Date(mountedAt + (me.max_retention_days - 1) * 24 * 3600 * 1000))}
+          onChange={(e) => setCustomDate(e.target.value)}
+          className="rounded border border-zinc-300 p-2"
+        />
+      )}
       <p className="text-xs text-zinc-600">
-        Originalfilerna raderas automatiskt efter {me.default_retention_days} dagar.
+        Analysen och originalfilerna raderas automatiskt vid raderingsdatumet. Längsta tillåtna
+        tid är {me.max_retention_days} dagar. Raderingen kan inte stängas av.
       </p>
       <button disabled={busy} className="rounded bg-black p-2 text-white disabled:opacity-50">
         {busy ? "Laddar upp…" : "Skapa analys"}
@@ -239,11 +299,20 @@ function AnalysisView({
   analysis,
   onBack,
   onRun,
+  maxRetentionDays,
+  onExtend,
+  onDelete,
 }: {
   analysis: Analysis;
   onBack: () => void;
   onRun: () => void;
+  maxRetentionDays: number;
+  onExtend: (date: Date) => void;
+  onDelete: () => void;
 }) {
+  const [newDate, setNewDate] = useState("");
+  // Taket räknas från skapandet.
+  const latest = new Date(new Date(analysis.created_at).getTime() + maxRetentionDays * 86400_000);
   const ranked = analysis.candidates.filter((c) => c.status === "done");
   const waiting = analysis.candidates.filter(
     (c) => c.status === "uploaded" || c.status === "queued" || c.status === "processing",
@@ -269,7 +338,35 @@ function AnalysisView({
         Tillbaka
       </button>
       <h2 className="text-xl font-semibold">{analysis.title}</h2>
-      <p className="text-sm text-zinc-600">Raderas {formatDate(analysis.expires_at)}</p>
+      <p className="text-sm text-zinc-600">
+        Raderas {formatDate(analysis.expires_at)} (längst {formatDate(latest.toISOString())})
+      </p>
+      <div className="flex flex-wrap items-center gap-2 text-sm">
+        <input
+          type="date"
+          value={newDate}
+          min={dateInput(new Date(analysis.expires_at))}
+          max={dateInput(new Date(latest.getTime() - 86400_000))}
+          onChange={(e) => setNewDate(e.target.value)}
+          className="rounded border border-zinc-300 p-1"
+        />
+        <button
+          disabled={!newDate}
+          onClick={() => onExtend(endOfDay(newDate))}
+          className="rounded border border-zinc-300 px-3 py-1 disabled:opacity-50"
+        >
+          Flytta fram raderingsdatum
+        </button>
+        <button
+          onClick={() => {
+            if (confirm("Radera analysen, kandidaterna och originalfilerna nu? Det går inte att ångra."))
+              onDelete();
+          }}
+          className="rounded border border-red-600 px-3 py-1 text-red-600"
+        >
+          Radera direkt
+        </button>
+      </div>
 
       {analysis.state === "ready" && (
         <button onClick={onRun} className="self-start rounded bg-black px-4 py-2 text-white">
@@ -396,4 +493,14 @@ function Detail({ label, children }: { label: string; children: React.ReactNode 
 
 function formatDate(iso: string): string {
   return new Date(iso).toLocaleDateString("sv-SE");
+}
+
+// Lokal datumsträng (ÅÅÅÅ-MM-DD) för <input type="date">.
+function dateInput(d: Date): string {
+  return d.toLocaleDateString("sv-SE");
+}
+
+// Slutet av vald dag (lokal tid), så "eget datum" betyder att analysen finns kvar hela dagen.
+function endOfDay(date: string): Date {
+  return new Date(`${date}T23:59:59`);
 }

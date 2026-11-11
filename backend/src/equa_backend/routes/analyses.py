@@ -34,6 +34,11 @@ from equa_backend.deps import (
 )
 from equa_backend.pipeline import BUCKET, Assessment
 from equa_backend.quota import remaining as quota_remaining
+from equa_backend.retention import (
+    default_retention_days,
+    delete_analysis,
+    max_retention_days,
+)
 
 router = APIRouter(prefix="/analyses")
 
@@ -158,6 +163,7 @@ def create_analysis(
     title: Annotated[str, Form()],
     job_ad: Annotated[str, Form()],
     files: list[UploadFile],
+    expires_at: Annotated[datetime | None, Form()] = None,
 ) -> AnalysisOut:
     title, job_ad = title.strip(), job_ad.strip()
     if not title or not job_ad or not files:
@@ -187,7 +193,11 @@ def create_analysis(
             )
         contents.append(data)
 
-    expires_at = datetime.now(UTC) + timedelta(days=profile["default_retention_days"])
+    now = datetime.now(UTC)
+    if expires_at is None:
+        expires_at = now + timedelta(days=default_retention_days(profile))
+    else:
+        expires_at = _checked_expiry(expires_at, now, profile)
     analysis = (
         supabase.table("analysis_batches")
         .insert(
@@ -379,6 +389,69 @@ def _check_quota(
             f"Kvoten räcker inte: du försöker köra {to_run} CV:n men har "
             f"{remaining} kvar av {limit} den här månaden. Inget kördes.",
         )
+
+
+class ExtendRequest(BaseModel):
+    expires_at: datetime
+
+
+def _checked_expiry(expires_at: datetime, since: datetime, profile: dict) -> datetime:
+    """Validerar ett raderingsdatum mot taket, som räknas från `since` (skapandet)."""
+    if expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=UTC)
+    max_days = max_retention_days(profile)
+    if expires_at <= datetime.now(UTC):
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
+            "Raderingsdatumet måste ligga i framtiden.",
+        )
+    if expires_at > since + timedelta(days=max_days):
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
+            f"Raderingsdatumet får ligga högst {max_days} dagar fram.",
+        )
+    return expires_at
+
+
+@router.patch("/{analysis_id}", response_model=AnalysisOut)
+def extend_analysis(
+    analysis_id: uuid.UUID,
+    body: ExtendRequest,
+    user: Annotated[CurrentUser, Depends(get_current_user)],
+    supabase: Annotated[Client, Depends(get_supabase)],
+) -> AnalysisOut:
+    """Flyttar fram raderingsdatumet, högst till taket räknat från skapandet."""
+    analysis = _own_analysis(supabase, user, analysis_id)
+    if datetime.fromisoformat(analysis["expires_at"]) <= datetime.now(UTC):
+        # Utgången analys väntar bara på raderingsjobbet och kan inte återupplivas.
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Analysen finns inte.")
+    created_at = datetime.fromisoformat(analysis["created_at"])
+    expires_at = _checked_expiry(body.expires_at, created_at, _profile(supabase, user))
+    if expires_at <= datetime.fromisoformat(analysis["expires_at"]):
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
+            "Raderingsdatumet kan bara flyttas fram, inte tidigare.",
+        )
+    analysis["expires_at"] = (
+        supabase.table("analysis_batches")
+        .update({"expires_at": expires_at.isoformat()})
+        .eq("id", str(analysis_id))
+        .execute()
+        .data[0]["expires_at"]
+    )
+    return _to_out(analysis, _candidates(analysis["candidates"]))
+
+
+@router.delete("/{analysis_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_analysis_now(
+    analysis_id: uuid.UUID,
+    user: Annotated[CurrentUser, Depends(get_current_user)],
+    supabase: Annotated[Client, Depends(get_supabase)],
+) -> Response:
+    """Radera direkt: analysen, kandidaterna och originalfilerna."""
+    _own_analysis(supabase, user, analysis_id)
+    delete_analysis(supabase, str(analysis_id))
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 def _own_analysis(supabase: Client, user: CurrentUser, analysis_id: uuid.UUID) -> dict:

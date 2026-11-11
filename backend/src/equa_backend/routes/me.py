@@ -8,6 +8,7 @@ from supabase import Client
 from equa_backend.config import Settings, get_settings
 from equa_backend.deps import CurrentUser, get_current_user, get_supabase
 from equa_backend.quota import remaining, used_this_month
+from equa_backend.retention import default_retention_days, max_retention_days
 
 router = APIRouter()
 
@@ -47,7 +48,7 @@ def me(
             used=used,
             remaining=remaining(supabase, user.id, limit, stale_before),
         ),
-        default_retention_days=row["default_retention_days"],
-        max_retention_days=row["max_retention_days"],
+        default_retention_days=default_retention_days(row),
+        max_retention_days=max_retention_days(row),
         max_file_size_mb=row["max_file_size_mb"],
     )
