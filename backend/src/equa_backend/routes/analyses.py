@@ -16,6 +16,13 @@ from pydantic import BaseModel
 from supabase import Client
 
 from equa_backend import pipeline
+from equa_backend.candidates import (
+    FINISHED,
+    IN_FLIGHT,
+    Candidate,
+    CandidateStatus,
+    PipelineStep,
+)
 from equa_backend.config import Settings, get_settings
 from equa_backend.deps import (
     CurrentUser,
@@ -28,15 +35,14 @@ from equa_backend.pipeline import BUCKET, Assessment
 router = APIRouter(prefix="/analyses")
 
 PDF_MAGIC = b"%PDF-"
-IN_FLIGHT = ("queued", "processing")
 
 
 class CandidateOut(BaseModel):
     # Anonym alias. Originalfilnamn visas aldrig (ADR 0004).
     alias: str
-    status: Literal["uploaded", "queued", "processing", "done", "failed"]
+    status: CandidateStatus
     # Aktuellt pipelinesteg medan kandidaten bearbetas.
-    step: Literal["pre_wash", "ai_wash", "safety_check", "assessment"] | None
+    step: PipelineStep | None
     assessment: Assessment | None
     failure_reason: str | None
 
@@ -69,47 +75,51 @@ class AnalysisSummary(BaseModel):
     candidate_count: int
 
 
+def _candidates(rows: list[dict]) -> list[Candidate]:
+    return [Candidate.model_validate(row) for row in rows]
+
+
 def _alias(number: int) -> str:
     return f"Kandidat #{number}"
 
 
-def _candidate_out(c: dict) -> CandidateOut:
+def _candidate_out(c: Candidate) -> CandidateOut:
     assessment = None
-    if c["status"] == "done":
+    if c.status == "done":
         assessment = Assessment(
-            score=c["score"],
-            years_experience=c["years_experience"],
-            education_match=c["education_match"],
-            concrete_results=c["concrete_results"],
-            key_skills=c["key_skills"],
-            missing_requirements=c["missing_requirements"],
-            rationale=c["rationale"],
+            score=c.score,
+            years_experience=c.years_experience,
+            education_match=c.education_match,
+            concrete_results=c.concrete_results,
+            key_skills=c.key_skills,
+            missing_requirements=c.missing_requirements,
+            rationale=c.rationale,
         )
     return CandidateOut(
-        alias=_alias(c["number"]),
-        status=c["status"],
-        step=c["step"],
+        alias=_alias(c.number),
+        status=c.status,
+        step=c.step,
         assessment=assessment,
-        failure_reason=c["failure_reason"],
+        failure_reason=c.failure_reason,
     )
 
 
-def _rank_key(c: dict) -> tuple:
+def _rank_key(c: Candidate) -> tuple:
     # Bedömda först, högst poäng överst. Övriga (pågår, ej körda, misslyckade) efter, i nummerordning.
-    if c["status"] == "done":
-        return (0, -c["score"], c["number"])
-    return (1, 0, c["number"])
+    if c.status == "done":
+        return (0, -(c.score or 0), c.number)
+    return (1, 0, c.number)
 
 
-def _state(candidates: list[dict]) -> Literal["ready", "running", "finished"]:
-    if any(c["status"] in IN_FLIGHT for c in candidates):
+def _state(candidates: list[Candidate]) -> Literal["ready", "running", "finished"]:
+    if any(c.status in IN_FLIGHT for c in candidates):
         return "running"
-    if any(c["status"] == "uploaded" for c in candidates):
+    if any(c.status == "uploaded" for c in candidates):
         return "ready"
     return "finished"
 
 
-def _to_out(analysis: dict, candidates: list[dict]) -> AnalysisOut:
+def _to_out(analysis: dict, candidates: list[Candidate]) -> AnalysisOut:
     return AnalysisOut(
         id=analysis["id"],
         title=analysis["title"],
@@ -119,7 +129,7 @@ def _to_out(analysis: dict, candidates: list[dict]) -> AnalysisOut:
         state=_state(candidates),
         progress=Progress(
             total=len(candidates),
-            finished=sum(c["status"] in ("done", "failed") for c in candidates),
+            finished=sum(c.status in FINISHED for c in candidates),
         ),
         candidates=[_candidate_out(c) for c in sorted(candidates, key=_rank_key)],
     )
@@ -200,7 +210,9 @@ def create_analysis(
             rows.append(
                 {"analysis_id": analysis["id"], "number": number, "original_path": path}
             )
-        candidates = supabase.table("candidates").insert(rows).execute().data
+        candidates = _candidates(
+            supabase.table("candidates").insert(rows).execute().data
+        )
     except Exception:
         # Städa upp så en misslyckad uppladdning inte lämnar kvar filer eller en tom analys.
         if stored:
@@ -243,7 +255,7 @@ def get_analysis(
 ) -> AnalysisOut:
     # Filtrera på user_id: andras analyser ser ut som att de inte finns.
     analysis = _own_analysis(supabase, user, analysis_id)
-    return _to_out(analysis, analysis["candidates"])
+    return _to_out(analysis, _candidates(analysis["candidates"]))
 
 
 @router.post(
@@ -266,32 +278,33 @@ def run_analysis(
     now = datetime.now(UTC)
     claim = {"status": "queued", "step": None, "claimed_at": now.isoformat()}
     cutoff = (now - timedelta(minutes=settings.stale_cv_minutes)).isoformat()
-    claimed = (
-        supabase.table("candidates")
-        .update(claim)
-        .eq("analysis_id", str(analysis_id))
-        .eq("status", "uploaded")
-        .execute()
-        .data
-    )
+
+    def claim_rows():
+        return (
+            supabase.table("candidates")
+            .update(claim)
+            .eq("analysis_id", str(analysis_id))
+        )
+
+    fresh = claim_rows().eq("status", "uploaded").execute().data
     # Återhämtning: CV:n som fastnat (t.ex. efter en omstart mitt i en körning) tas om.
-    claimed += (
-        supabase.table("candidates")
-        .update(claim)
-        .eq("analysis_id", str(analysis_id))
+    stuck = (
+        claim_rows()
         .in_("status", list(IN_FLIGHT))
         .or_(f"claimed_at.is.null,claimed_at.lt.{cutoff}")
         .execute()
         .data
     )
+    claimed = _candidates(fresh + stuck)
     if not claimed:
         raise HTTPException(
             status.HTTP_409_CONFLICT, "Det finns inga CV:n att köra just nu."
         )
-    claimed_ids = {c["id"] for c in claimed}
-    for c in analysis["candidates"]:
-        if c["id"] in claimed_ids:
-            c["status"] = "queued"
+    claimed_ids = {c.id for c in claimed}
+    candidates = _candidates(analysis["candidates"])
+    for c in candidates:
+        if c.id in claimed_ids:
+            c.status = "queued"
     background.add_task(
         pipeline.run_analysis,
         supabase,
@@ -300,7 +313,7 @@ def run_analysis(
         analysis["job_ad"],
         claimed,
     )
-    return _to_out(analysis, analysis["candidates"])
+    return _to_out(analysis, candidates)
 
 
 def _own_analysis(supabase: Client, user: CurrentUser, analysis_id: uuid.UUID) -> dict:

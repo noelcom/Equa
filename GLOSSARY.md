@@ -30,15 +30,19 @@ Format: **Svensk term** (kodnamn) – definition. _Undvik:_ synonymer vi inte an
 
 ## Pipeline
 
-**Förtvätt** – lokal PDF→Markdown (bilder kastas) plus regex som tar bort e-post, telefon, personnummer och webbadresser.
+**Förtvätt** – lokal PDF→text (ren text, ingen Markdown, bilder kastas) plus regex som tar bort e-post, telefon, personnummer och webbadresser.
 
 **AI-tvätt** – Haiku byter ut namn, adresser, ålder och könspronomen mot `[BORTTAGET]`.
 
 **Säkerhetskontroll** – regex körs igen på tvättad text. Hittas något stoppas CV:t.
 
+**Omförsök** – tillfälliga AI-fel (429, timeout, 5xx) provas om med växande väntetid innan CV:t blir `failed`.
+
 **Bedömningssteg** – Sonnet bedömer tvättad text mot annonsen, med strukturerad utdata (Pydantic).
 
-**Kunde inte analyseras** (`failed`) – eget tillstånd för CV:n som inte kunde läsas (t.ex. inskannad bild), inte anonymiseras säkert eller inte tolkades. Aldrig poäng 0, och räknas inte mot kvoten.
+**Kunde inte analyseras** (`failed`) – eget tillstånd för CV:n som inte kunde läsas (t.ex. inskannad bild), inte anonymiseras säkert (även när AI-tvätten ger tomt svar eller vägrar), inte tolkades eller inte kunde bedömas för att AI-tjänsten var tillfälligt otillgänglig efter flera försök. Aldrig poäng 0, och räknas inte mot kvoten.
+
+**Fastnat CV** – ett CV som stått som `queued`/`processing` längre än 15 minuter utan framsteg (`claimed_at`, en hjärtslagsstämpel som uppdateras vid varje steg). Rekryteraren kan ta om det via "Ta om fastnade CV:n" (`/run`).
 
 ## Data och gränser
 

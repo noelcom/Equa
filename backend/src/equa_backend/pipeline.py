@@ -14,6 +14,7 @@ from pydantic import BaseModel, Field, ValidationError
 from supabase import Client, create_client
 
 from equa_backend.anonymize import contains_contact_details, pre_wash
+from equa_backend.candidates import Candidate
 from equa_backend.config import Settings
 from equa_backend.pdf import UnreadablePdf, pdf_to_text
 
@@ -182,15 +183,15 @@ def _process(
     client: anthropic.Anthropic,
     settings: Settings,
     job_ad: str,
-    candidate: dict,
+    candidate: Candidate,
 ) -> None:
-    candidate_id = candidate["id"]
+    candidate_id = candidate.id
     # En egen klient per CV: supabase-py garanterar inte trådsäkerhet, och sju trådar på
     # en delad HTTP/2-anslutning gav sporadiska "Server disconnected".
     supabase = create_client(settings.supabase_url, settings.supabase_service_role_key)
     try:
         _set(supabase, candidate_id, status="processing", step="pre_wash")
-        original = supabase.storage.from_(BUCKET).download(candidate["original_path"])
+        original = supabase.storage.from_(BUCKET).download(candidate.original_path)
         try:
             text = pdf_to_text(original)
         except UnreadablePdf:
@@ -234,7 +235,7 @@ def run_analysis(
     client: anthropic.Anthropic,
     settings: Settings,
     job_ad: str,
-    candidates: list[dict],
+    candidates: list[Candidate],
 ) -> None:
     """Kör alla givna kandidater genom pipelinen, högst `max_parallel_cvs` åt gången."""
     with ThreadPoolExecutor(max_workers=settings.max_parallel_cvs) as pool:
@@ -251,7 +252,7 @@ def run_analysis(
                 "failure_reason": "Oväntat fel vid analysen.",
             }
         )
-        .in_("id", [c["id"] for c in candidates])
+        .in_("id", [c.id for c in candidates])
         .in_("status", ["queued", "processing"])
         .execute()
     )
