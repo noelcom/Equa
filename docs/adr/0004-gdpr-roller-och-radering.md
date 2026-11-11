@@ -1,6 +1,6 @@
 # 0004 – GDPR-roller och radering
 
-Status: accepterad
+Status: ersatt av 0007 (taket räknas nu från idag och kan förlängas aktivt)
 
 ## Beslut
 - Equa är personuppgiftsbiträde, kunden är personuppgiftsansvarig. Anthropic och Supabase är underbiträden. Pilotkunder signerar ett personuppgiftsbiträdesavtal (DPA) före konto.
