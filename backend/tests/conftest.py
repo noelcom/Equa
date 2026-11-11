@@ -180,6 +180,8 @@ def make_user(admin: Client):
         paths = [c["original_path"] for a in analyses for c in a["candidates"]]
         if paths:
             admin.storage.from_("originals").remove(paths)
+        # Användningsloggen är permanent och har ingen cascade, så testet städar den själv.
+        admin.table("usage_logs").delete().eq("customer_id", user_id).execute()
         admin.auth.admin.delete_user(user_id)
 
 

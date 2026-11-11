@@ -7,6 +7,7 @@ texten finns bara i minnet under körningen och sparas aldrig (ADR 0004).
 import logging
 import time
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
 from datetime import UTC, datetime
 
 import anthropic
@@ -17,6 +18,7 @@ from equa_backend.anonymize import contains_contact_details, pre_wash
 from equa_backend.candidates import Candidate
 from equa_backend.config import Settings
 from equa_backend.pdf import UnreadablePdf, pdf_to_text
+from equa_backend.quota import write_usage_log
 
 BUCKET = "originals"
 log = logging.getLogger(__name__)
@@ -72,6 +74,27 @@ class Assessment(BaseModel):
     rationale: str = Field(description="Motivering till poängen.")
 
 
+@dataclass
+class Usage:
+    """Förbrukning för ett CV: tokens och om det lyckades."""
+
+    input_tokens: int = 0
+    output_tokens: int = 0
+    succeeded: bool = False
+
+    def add(self, response) -> None:
+        # Cache-token räknas som indata: de är också token som Anthropic fakturerar.
+        u = getattr(response, "usage", None)
+        if u is None:
+            return
+        self.input_tokens += (
+            (getattr(u, "input_tokens", 0) or 0)
+            + (getattr(u, "cache_creation_input_tokens", 0) or 0)
+            + (getattr(u, "cache_read_input_tokens", 0) or 0)
+        )
+        self.output_tokens += getattr(u, "output_tokens", 0) or 0
+
+
 class PipelineError(Exception):
     """Ett CV stoppades. `reason` är en kort standardtext utan CV-innehåll."""
 
@@ -121,7 +144,9 @@ def _with_retry(settings: Settings, call):
             time.sleep(settings.anthropic_retry_backoff_seconds * 2 ** (attempt - 1))
 
 
-def _wash(client: anthropic.Anthropic, settings: Settings, text: str) -> str:
+def _wash(
+    client: anthropic.Anthropic, settings: Settings, text: str, usage: Usage
+) -> str:
     response = _with_retry(
         settings,
         lambda: client.messages.create(
@@ -131,6 +156,7 @@ def _wash(client: anthropic.Anthropic, settings: Settings, text: str) -> str:
             messages=[{"role": "user", "content": text}],
         ),
     )
+    usage.add(response)
     if getattr(response, "stop_reason", None) == "max_tokens":
         # Ett avklippt CV skulle ge en orättvist låg poäng.
         raise PipelineError("CV:t var för långt för att anonymiseras.")
@@ -143,7 +169,11 @@ def _wash(client: anthropic.Anthropic, settings: Settings, text: str) -> str:
 
 
 def _assess(
-    client: anthropic.Anthropic, settings: Settings, job_ad: str, washed: str
+    client: anthropic.Anthropic,
+    settings: Settings,
+    job_ad: str,
+    washed: str,
+    usage: Usage,
 ) -> Assessment:
     try:
         response = _with_retry(
@@ -181,6 +211,7 @@ def _assess(
     except ValidationError:
         # AI-svaret följde inte schemat. Aldrig poäng 0: CV:t blir "kunde inte analyseras".
         raise PipelineError("Bedömningen kunde inte tolkas.") from None
+    usage.add(response)
     if response.parsed_output is None:
         raise PipelineError("Bedömningen kunde inte tolkas.")
     return response.parsed_output
@@ -191,7 +222,9 @@ def _process(
     settings: Settings,
     job_ad: str,
     candidate: Candidate,
-) -> None:
+) -> Usage:
+    """Kör ett CV och returnerar dess förbrukning. Fel sparas på kandidaten, inte kastas."""
+    usage = Usage()
     candidate_id = candidate.id
     # En egen klient per CV: supabase-py garanterar inte trådsäkerhet, och sju trådar på
     # en delad HTTP/2-anslutning gav sporadiska "Server disconnected".
@@ -207,12 +240,12 @@ def _process(
             ) from None
         text = pre_wash(text)
         _set(supabase, candidate_id, step="ai_wash")
-        washed = _wash(client, settings, text)
+        washed = _wash(client, settings, text, usage)
         _set(supabase, candidate_id, step="safety_check")
         if contains_contact_details(washed):
             raise PipelineError("Kunde inte anonymiseras säkert.")
         _set(supabase, candidate_id, step="assessment")
-        assessment = _assess(client, settings, job_ad, washed)
+        assessment = _assess(client, settings, job_ad, washed, usage)
         _set(
             supabase,
             candidate_id,
@@ -221,6 +254,7 @@ def _process(
             failure_reason=None,
             **assessment.model_dump(),
         )
+        usage.succeeded = True
     except PipelineError as e:
         _set(
             supabase, candidate_id, status="failed", step=None, failure_reason=e.reason
@@ -235,19 +269,35 @@ def _process(
             step=None,
             failure_reason="Oväntat fel vid analysen.",
         )
+    return usage
 
 
 def run_analysis(
     supabase: Client,
     client: anthropic.Anthropic,
     settings: Settings,
+    customer_id: str,
     job_ad: str,
     candidates: list[Candidate],
 ) -> None:
-    """Kör alla givna kandidater genom pipelinen, högst `max_parallel_cvs` åt gången."""
+    """Kör alla givna kandidater genom pipelinen, högst `max_parallel_cvs` åt gången.
+
+    Skriver en rad i användningsloggen när körningen är klar.
+    """
     with ThreadPoolExecutor(max_workers=settings.max_parallel_cvs) as pool:
-        for candidate in candidates:
+        futures = [
             pool.submit(_process, client, settings, job_ad, candidate)
+            for candidate in candidates
+        ]
+    usages = [f.result() for f in futures if f.exception() is None]
+    # Loggen skrivs först: lyckade CV:n är redan sparade och får inte förloras om nätet nedan faller.
+    write_usage_log(
+        supabase,
+        customer_id,
+        cv_count=sum(u.succeeded for u in usages),
+        input_tokens=sum(u.input_tokens for u in usages),
+        output_tokens=sum(u.output_tokens for u in usages),
+    )
     # Sista nätet: om en arbetare föll samtidigt som den försökte spara felet (t.ex. vid
     # ett nätverksavbrott) får CV:t inte stå som "pågår" för alltid.
     (

@@ -33,6 +33,7 @@ from equa_backend.deps import (
     get_supabase,
 )
 from equa_backend.pipeline import BUCKET, Assessment
+from equa_backend.quota import remaining as quota_remaining
 
 router = APIRouter(prefix="/analyses")
 
@@ -278,11 +279,13 @@ def run_analysis(
 ) -> AnalysisOut:
     """Startar pipelinen för analysens ännu ej körda CV:n. Resultatet hämtas via GET."""
     analysis = _own_analysis(supabase, user, analysis_id)
+    now = datetime.now(UTC)
+    stale_before = now - timedelta(minutes=settings.stale_cv_minutes)
+    _check_quota(supabase, user, _candidates(analysis["candidates"]), stale_before)
     # Atomära anspråk i databasen, så en dubbelklick inte kör samma CV två gånger.
     # Anspråket stämplar last_progress_at, så ett samtidigt anrop inte hittar CV:t som fastnat.
-    now = datetime.now(UTC)
     claim = {"status": "queued", "step": None, "last_progress_at": now.isoformat()}
-    cutoff = (now - timedelta(minutes=settings.stale_cv_minutes)).isoformat()
+    cutoff = stale_before.isoformat()
 
     def claim_rows():
         return (
@@ -315,6 +318,7 @@ def run_analysis(
         supabase,
         anthropic_client,
         settings,
+        user.id,
         analysis["job_ad"],
         claimed,
     )
@@ -351,6 +355,30 @@ def reveal_candidate(
         media_type="application/pdf",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
+
+
+def _check_quota(
+    supabase: Client,
+    user: CurrentUser,
+    candidates: list[Candidate],
+    stale_before: datetime,
+) -> None:
+    """Stoppar en körning som skulle överskrida månadskvoten, innan något körs.
+
+    Kontrollen utgår från antal uppladdade filer, eftersom utfallet inte är känt i förväg.
+    Det som faktiskt räknas mot kvoten är bara lyckade CV:n (se användningsloggen).
+    """
+    to_run = sum(c.is_runnable(stale_before) for c in candidates)
+    if not to_run:
+        return  # inget att köra: /run svarar 409 nedan
+    limit = _profile(supabase, user)["cv_quota_limit"]
+    remaining = quota_remaining(supabase, user.id, limit, stale_before)
+    if to_run > remaining:
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            f"Kvoten räcker inte: du försöker köra {to_run} CV:n men har "
+            f"{remaining} kvar av {limit} den här månaden. Inget kördes.",
+        )
 
 
 def _own_analysis(supabase: Client, user: CurrentUser, analysis_id: uuid.UUID) -> dict:

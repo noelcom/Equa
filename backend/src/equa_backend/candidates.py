@@ -1,5 +1,6 @@
 """Kandidatens rad i databasen och dess tillstånd. Enda stället som definierar statusarna."""
 
+from datetime import datetime
 from typing import Literal
 
 from pydantic import BaseModel
@@ -29,3 +30,14 @@ class Candidate(BaseModel):
     missing_requirements: str | None = None
     rationale: str | None = None
     failure_reason: str | None = None
+    # Hjärtslagsstämpel: senaste framsteg medan CV:t körs.
+    last_progress_at: datetime | None = None
+
+    def is_stale(self, before: datetime) -> bool:
+        return self.status in IN_FLIGHT and (
+            self.last_progress_at is None or self.last_progress_at < before
+        )
+
+    def is_runnable(self, stale_before: datetime) -> bool:
+        """Ska tas av en körning: uppladdat, eller fastnat."""
+        return self.status == "uploaded" or self.is_stale(stale_before)
