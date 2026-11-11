@@ -7,13 +7,38 @@ export type Me = {
   max_file_size_mb: number;
 };
 
+export type Assessment = {
+  score: number;
+  years_experience: number;
+  education_match: string;
+  concrete_results: string;
+  key_skills: string[];
+  missing_requirements: string;
+  rationale: string;
+};
+
+export type CandidateStatus = "uploaded" | "queued" | "processing" | "done" | "failed";
+export type PipelineStep = "pre_wash" | "ai_wash" | "safety_check" | "assessment";
+
+export type Candidate = {
+  alias: string;
+  status: CandidateStatus;
+  step: PipelineStep | null;
+  assessment: Assessment | null;
+  failure_reason: string | null;
+};
+
 export type Analysis = {
   id: string;
   title: string;
   job_ad: string;
   expires_at: string;
   created_at: string;
-  candidates: { alias: string }[];
+  // ready: det finns CV:n att köra. running: körning pågår. finished: inget mer att köra.
+  state: "ready" | "running" | "finished";
+  progress: { total: number; finished: number };
+  // Bedömda kandidater efter poäng (högst först), därefter övriga i nummerordning.
+  candidates: Candidate[];
 };
 
 export type AnalysisSummary = {
@@ -58,6 +83,12 @@ export async function listAnalyses(): Promise<AnalysisSummary[]> {
 export async function getAnalysis(id: string): Promise<Analysis> {
   const res = await authedFetch(`/analyses/${id}`);
   if (!res.ok) throw new Error(await errorMessage(res, "Kunde inte hämta analysen"));
+  return res.json();
+}
+
+export async function runAnalysis(id: string): Promise<Analysis> {
+  const res = await authedFetch(`/analyses/${id}/run`, { method: "POST" });
+  if (!res.ok) throw new Error(await errorMessage(res, "Kunde inte starta analysen"));
   return res.json();
 }
 

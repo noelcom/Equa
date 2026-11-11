@@ -1,22 +1,51 @@
 import uuid
 from datetime import UTC, datetime, timedelta
-from typing import Annotated
+from typing import Annotated, Literal
 
-from fastapi import APIRouter, Depends, Form, HTTPException, UploadFile, status
+import anthropic
+from fastapi import (
+    APIRouter,
+    BackgroundTasks,
+    Depends,
+    Form,
+    HTTPException,
+    UploadFile,
+    status,
+)
 from pydantic import BaseModel
 from supabase import Client
 
-from equa_backend.deps import CurrentUser, get_current_user, get_supabase
+from equa_backend import pipeline
+from equa_backend.config import Settings, get_settings
+from equa_backend.deps import (
+    CurrentUser,
+    get_anthropic_client,
+    get_current_user,
+    get_supabase,
+)
+from equa_backend.pipeline import Assessment
 
 router = APIRouter(prefix="/analyses")
 
 BUCKET = "originals"
 PDF_MAGIC = b"%PDF-"
+IN_FLIGHT = ("queued", "processing")
 
 
 class CandidateOut(BaseModel):
     # Anonym alias. Originalfilnamn visas aldrig (ADR 0004).
     alias: str
+    status: Literal["uploaded", "queued", "processing", "done", "failed"]
+    # Aktuellt pipelinesteg medan kandidaten bearbetas.
+    step: Literal["pre_wash", "ai_wash", "safety_check", "assessment"] | None
+    assessment: Assessment | None
+    failure_reason: str | None
+
+
+class Progress(BaseModel):
+    total: int
+    # Färdiga, antingen bedömda eller "kunde inte analyseras".
+    finished: int
 
 
 class AnalysisOut(BaseModel):
@@ -25,6 +54,11 @@ class AnalysisOut(BaseModel):
     job_ad: str
     expires_at: datetime
     created_at: datetime
+    # ready: det finns CV:n att köra. running: en körning pågår. finished: inget mer att köra.
+    state: Literal["ready", "running", "finished"]
+    progress: Progress
+    # Leaderboard: bedömda kandidater efter poäng (högst först), därefter övriga
+    # i nummerordning. Ingen kandidat filtreras bort (ADR 0003).
     candidates: list[CandidateOut]
 
 
@@ -40,6 +74,42 @@ def _alias(number: int) -> str:
     return f"Kandidat #{number}"
 
 
+def _candidate_out(c: dict) -> CandidateOut:
+    assessment = None
+    if c["status"] == "done":
+        assessment = Assessment(
+            score=c["score"],
+            years_experience=c["years_experience"],
+            education_match=c["education_match"],
+            concrete_results=c["concrete_results"],
+            key_skills=c["key_skills"],
+            missing_requirements=c["missing_requirements"],
+            rationale=c["rationale"],
+        )
+    return CandidateOut(
+        alias=_alias(c["number"]),
+        status=c["status"],
+        step=c["step"],
+        assessment=assessment,
+        failure_reason=c["failure_reason"],
+    )
+
+
+def _rank_key(c: dict) -> tuple:
+    # Bedömda först, högst poäng överst. Övriga (pågår, ej körda, misslyckade) efter, i nummerordning.
+    if c["status"] == "done":
+        return (0, -c["score"], c["number"])
+    return (1, 0, c["number"])
+
+
+def _state(candidates: list[dict]) -> Literal["ready", "running", "finished"]:
+    if any(c["status"] in IN_FLIGHT for c in candidates):
+        return "running"
+    if any(c["status"] == "uploaded" for c in candidates):
+        return "ready"
+    return "finished"
+
+
 def _to_out(analysis: dict, candidates: list[dict]) -> AnalysisOut:
     return AnalysisOut(
         id=analysis["id"],
@@ -47,10 +117,12 @@ def _to_out(analysis: dict, candidates: list[dict]) -> AnalysisOut:
         job_ad=analysis["job_ad"],
         expires_at=analysis["expires_at"],
         created_at=analysis["created_at"],
-        candidates=[
-            CandidateOut(alias=_alias(c["number"]))
-            for c in sorted(candidates, key=lambda c: c["number"])
-        ],
+        state=_state(candidates),
+        progress=Progress(
+            total=len(candidates),
+            finished=sum(c["status"] in ("done", "failed") for c in candidates),
+        ),
+        candidates=[_candidate_out(c) for c in sorted(candidates, key=_rank_key)],
     )
 
 
@@ -171,9 +243,58 @@ def get_analysis(
     supabase: Annotated[Client, Depends(get_supabase)],
 ) -> AnalysisOut:
     # Filtrera på user_id: andras analyser ser ut som att de inte finns.
+    analysis = _own_analysis(supabase, user, analysis_id)
+    return _to_out(analysis, analysis["candidates"])
+
+
+@router.post(
+    "/{analysis_id}/run",
+    status_code=status.HTTP_202_ACCEPTED,
+    response_model=AnalysisOut,
+)
+def run_analysis(
+    analysis_id: uuid.UUID,
+    background: BackgroundTasks,
+    user: Annotated[CurrentUser, Depends(get_current_user)],
+    supabase: Annotated[Client, Depends(get_supabase)],
+    anthropic_client: Annotated[anthropic.Anthropic, Depends(get_anthropic_client)],
+    settings: Annotated[Settings, Depends(get_settings)],
+) -> AnalysisOut:
+    """Startar pipelinen för analysens ännu ej körda CV:n. Resultatet hämtas via GET."""
+    analysis = _own_analysis(supabase, user, analysis_id)
+    # Ett atomärt anspråk i databasen, så en dubbelklick inte kör samma CV två gånger.
+    claimed = (
+        supabase.table("candidates")
+        .update({"status": "queued"})
+        .eq("analysis_id", str(analysis_id))
+        .eq("status", "uploaded")
+        .execute()
+        .data
+    )
+    if not claimed:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT, "Det finns inga CV:n att köra just nu."
+        )
+    claimed_ids = {c["id"] for c in claimed}
+    for c in analysis["candidates"]:
+        if c["id"] in claimed_ids:
+            c["status"] = "queued"
+    background.add_task(
+        pipeline.run_analysis,
+        supabase,
+        anthropic_client,
+        settings,
+        analysis["job_ad"],
+        claimed,
+    )
+    return _to_out(analysis, analysis["candidates"])
+
+
+def _own_analysis(supabase: Client, user: CurrentUser, analysis_id: uuid.UUID) -> dict:
+    # Filtrera på user_id: andras analyser ser ut som att de inte finns.
     rows = (
         supabase.table("analysis_batches")
-        .select("*, candidates(number)")
+        .select("*, candidates(*)")
         .eq("id", str(analysis_id))
         .eq("user_id", user.id)
         .execute()
@@ -181,4 +302,4 @@ def get_analysis(
     )
     if not rows:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Analysen finns inte.")
-    return _to_out(rows[0], rows[0]["candidates"])
+    return rows[0]

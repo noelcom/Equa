@@ -5,10 +5,22 @@ import {
   createAnalysis,
   getAnalysis,
   listAnalyses,
+  runAnalysis,
   type Analysis,
   type AnalysisSummary,
+  type Candidate,
   type Me,
+  type PipelineStep,
 } from "@/lib/api";
+
+const POLL_MS = 2000;
+
+const STEP_LABEL: Record<PipelineStep, string> = {
+  pre_wash: "Förtvättar",
+  ai_wash: "Anonymiserar",
+  safety_check: "Säkerhetskontroll",
+  assessment: "Bedömer",
+};
 
 const SELECTED_KEY = "equa.selectedAnalysis";
 
@@ -74,11 +86,37 @@ export function Analyses({ me }: { me: Me }) {
     }
   }, []);
 
+  // Medan en körning pågår hämtas analysen om och om igen, så att progress och
+  // leaderboard uppdateras i realtid.
+  const runningId = selected?.state === "running" ? selected.id : null;
+  useEffect(() => {
+    if (!runningId) return;
+    const timer = setInterval(() => {
+      getAnalysis(runningId)
+        .then(setSelected)
+        .catch((e: Error) => setError(e.message));
+    }, POLL_MS);
+    return () => clearInterval(timer);
+  }, [runningId]);
+
+  async function startRun(id: string) {
+    setError(null);
+    try {
+      setSelected(await runAnalysis(id));
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  }
+
   return (
     <section className="flex flex-col gap-4">
       {error && <p className="text-sm text-red-600">{error}</p>}
       {selected ? (
-        <AnalysisView analysis={selected} onBack={() => void open(null)} />
+        <AnalysisView
+          analysis={selected}
+          onBack={() => void open(null)}
+          onRun={() => void startRun(selected.id)}
+        />
       ) : (
         <>
           <NewAnalysis
@@ -193,7 +231,22 @@ function AnalysisList({
   );
 }
 
-function AnalysisView({ analysis, onBack }: { analysis: Analysis; onBack: () => void }) {
+function AnalysisView({
+  analysis,
+  onBack,
+  onRun,
+}: {
+  analysis: Analysis;
+  onBack: () => void;
+  onRun: () => void;
+}) {
+  const ranked = analysis.candidates.filter((c) => c.status === "done");
+  const waiting = analysis.candidates.filter(
+    (c) => c.status === "uploaded" || c.status === "queued" || c.status === "processing",
+  );
+  const failed = analysis.candidates.filter((c) => c.status === "failed");
+  const { total, finished } = analysis.progress;
+
   return (
     <div className="flex flex-col gap-3">
       <button onClick={onBack} className="self-start text-sm underline">
@@ -201,13 +254,97 @@ function AnalysisView({ analysis, onBack }: { analysis: Analysis; onBack: () => 
       </button>
       <h2 className="text-xl font-semibold">{analysis.title}</h2>
       <p className="text-sm text-zinc-600">Raderas {formatDate(analysis.expires_at)}</p>
-      <ul className="flex flex-col gap-1">
-        {analysis.candidates.map((c) => (
-          <li key={c.alias} className="rounded border border-zinc-300 p-2">
-            {c.alias}
-          </li>
-        ))}
-      </ul>
+
+      {analysis.state === "ready" && (
+        <button onClick={onRun} className="self-start rounded bg-black px-4 py-2 text-white">
+          Starta analys
+        </button>
+      )}
+      {analysis.state === "running" && (
+        <div className="flex flex-col gap-1" role="status">
+          <p className="text-sm">
+            Analyserar… {finished} av {total} CV:n klara
+          </p>
+          <progress value={finished} max={total} className="w-full" />
+        </div>
+      )}
+
+      {ranked.length > 0 && (
+        <div className="flex flex-col gap-2">
+          <h3 className="font-medium">Leaderboard</h3>
+          <p className="text-xs text-zinc-600">
+            Poängen är ett beslutsstöd. Urvalet gör alltid du.
+          </p>
+          <ol className="flex flex-col gap-2">
+            {ranked.map((c, i) => (
+              <RankedCandidate key={c.alias} candidate={c} rank={i + 1} />
+            ))}
+          </ol>
+        </div>
+      )}
+
+      {waiting.length > 0 && (
+        <div className="flex flex-col gap-2">
+          <h3 className="font-medium">{analysis.state === "ready" ? "Uppladdade" : "Pågår"}</h3>
+          <ul className="flex flex-col gap-1">
+            {waiting.map((c) => (
+              <li key={c.alias} className="rounded border border-zinc-300 p-2 text-sm">
+                {c.alias}
+                {c.step && <span className="text-zinc-600"> · {STEP_LABEL[c.step]}</span>}
+                {c.status === "queued" && <span className="text-zinc-600"> · I kö</span>}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {failed.length > 0 && (
+        <div className="flex flex-col gap-2">
+          <h3 className="font-medium">Kunde inte analyseras</h3>
+          <ul className="flex flex-col gap-1">
+            {failed.map((c) => (
+              <li key={c.alias} className="rounded border border-zinc-300 p-2 text-sm">
+                {c.alias}
+                <span className="block text-zinc-600">{c.failure_reason}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function RankedCandidate({ candidate, rank }: { candidate: Candidate; rank: number }) {
+  const a = candidate.assessment;
+  if (!a) return null;
+  return (
+    <li className="rounded border border-zinc-300 p-3">
+      <details>
+        <summary className="flex cursor-pointer items-baseline justify-between gap-3">
+          <span>
+            <span className="text-zinc-600">{rank}.</span> {candidate.alias}
+          </span>
+          <span className="font-medium">{a.score} / 100</span>
+        </summary>
+        <dl className="mt-3 flex flex-col gap-2 text-sm">
+          <Detail label="Relevanta år i branschen">{a.years_experience}</Detail>
+          <Detail label="Utbildning">{a.education_match}</Detail>
+          <Detail label="Konkreta resultat">{a.concrete_results}</Detail>
+          <Detail label="Nyckelkompetenser">{a.key_skills.join(", ")}</Detail>
+          <Detail label="Saknade krav">{a.missing_requirements}</Detail>
+          <Detail label="Motivering">{a.rationale}</Detail>
+        </dl>
+      </details>
+    </li>
+  );
+}
+
+function Detail({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div>
+      <dt className="font-medium">{label}</dt>
+      <dd className="text-zinc-700">{children}</dd>
     </div>
   );
 }

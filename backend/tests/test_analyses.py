@@ -33,7 +33,12 @@ def test_create_analysis_with_several_cvs_gives_anonymous_candidates(client, mak
     body = res.json()
     assert body["title"] == "Backendutvecklare"
     assert body["job_ad"] == "Vi söker en utvecklare."
-    assert body["candidates"] == [{"alias": "Kandidat #1"}, {"alias": "Kandidat #2"}]
+    assert [c["alias"] for c in body["candidates"]] == ["Kandidat #1", "Kandidat #2"]
+    assert body["state"] == "ready"
+    assert all(
+        c["status"] == "uploaded" and c["assessment"] is None
+        for c in body["candidates"]
+    )
     # Originalfilnamn läcker aldrig.
     assert "anna" not in res.text.lower()
     assert "andersson" not in res.text.lower()
