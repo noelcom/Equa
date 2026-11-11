@@ -1,4 +1,4 @@
-"""Avslöja: rekryteraren laddar ner originalfilen för en vald kandidat (ADR 0004)."""
+"""Avslöja: rekryteraren laddar ner originalfilen för en vald kandidat (ADR 0007)."""
 
 import logging
 
@@ -34,7 +34,7 @@ def test_reveal_downloads_the_original_file_of_the_chosen_candidate(client, make
     assert res.status_code == 200
     assert res.headers["content-type"] == "application/pdf"
     assert res.content == second
-    # Filnamnet är det anonyma aliaset, aldrig originalfilnamnet (ADR 0004).
+    # Filnamnet är det anonyma aliaset, aldrig originalfilnamnet (ADR 0007).
     assert res.headers["content-disposition"] == 'attachment; filename="Kandidat-2.pdf"'
 
 

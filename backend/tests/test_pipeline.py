@@ -555,6 +555,7 @@ def test_delete_now_in_the_middle_of_a_run_succeeds_and_nothing_is_recreated(
     _configure(client, max_parallel_cvs=1)
     user = make_user()
     analysis = _analysis(client, user, [("a.pdf", cv("Utvecklare.\nPOÄNG 80"))])
+    paths = _original_paths(admin, analysis["id"])
     statuses = []
 
     def delete_now(_text):
@@ -566,7 +567,7 @@ def test_delete_now_in_the_middle_of_a_run_succeeds_and_nothing_is_recreated(
     run = _run(client, user, analysis["id"])
 
     assert statuses == [204]
-    assert run.status_code < 300  # körningen avslutades utan krasch
+    assert run.status_code == 202
     assert _candidate_count(admin, analysis["id"]) == 0
     assert (
         admin.table("analysis_batches")
@@ -577,6 +578,7 @@ def test_delete_now_in_the_middle_of_a_run_succeeds_and_nothing_is_recreated(
         == []
     )
     assert client.get(f"/analyses/{analysis['id']}", headers=user.auth).status_code == 404
+    assert paths and not any(_file_exists(admin, p) for p in paths)
 
 
 def test_purge_job_deleting_an_expired_analysis_mid_run_has_the_same_outcome(
@@ -596,13 +598,15 @@ def test_purge_job_deleting_an_expired_analysis_mid_run_has_the_same_outcome(
         ).eq("id", analysis["id"]).execute()
         purge_expired(admin)
 
+    paths = _original_paths(admin, analysis["id"])
     anthropic_fake.on_assess = expire_and_purge
 
     run = _run(client, user, analysis["id"])
 
-    assert run.status_code < 300
+    assert run.status_code == 202
     assert _candidate_count(admin, analysis["id"]) == 0
     assert client.get(f"/analyses/{analysis['id']}", headers=user.auth).status_code == 404
+    assert paths and not any(_file_exists(admin, p) for p in paths)
 
 
 def test_cv_assessed_after_the_analysis_was_deleted_is_not_counted_but_tokens_are_logged(
@@ -620,3 +624,19 @@ def test_cv_assessed_after_the_analysis_was_deleted_is_not_counted_but_tokens_ar
     (log,) = _usage_logs(admin, user)
     assert log["cv_count"] == 0
     assert log["input_tokens"] > 0 and log["output_tokens"] > 0
+
+
+def _original_paths(admin, analysis_id):
+    return [
+        r["original_path"]
+        for r in admin.table("candidates")
+        .select("original_path")
+        .eq("analysis_id", analysis_id)
+        .execute()
+        .data
+    ]
+
+
+def _file_exists(admin, path):
+    folder, name = path.rsplit("/", 1)
+    return any(f["name"] == name for f in admin.storage.from_("originals").list(folder))

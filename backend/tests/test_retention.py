@@ -1,4 +1,4 @@
-"""Raderingsdatum, flytta fram, radera direkt och det schemalagda raderingsjobbet (ADR 0004)."""
+"""Raderingsdatum, flytta fram, radera direkt och det schemalagda raderingsjobbet (ADR 0007)."""
 
 from datetime import UTC, datetime, timedelta
 
