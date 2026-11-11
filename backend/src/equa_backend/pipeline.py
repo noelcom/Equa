@@ -86,6 +86,7 @@ def _set(supabase: Client, candidate_id: str, **fields) -> None:
     supabase.table("candidates").update(fields).eq("id", candidate_id).execute()
 
 
+AI_ERROR_REASON = "AI-tjänsten returnerade ett fel. Kontakta Equa om det upprepas."
 TRANSIENT_REASON = "AI-tjänsten var tillfälligt otillgänglig. Försök igen senare."
 
 
@@ -102,7 +103,13 @@ def _with_retry(settings: Settings, call):
             return call()
         except anthropic.APIError as e:
             if not _is_transient(e):
-                raise
+                # Ett permanent fel (t.ex. ogiltig begäran eller nyckel) hjälper inte att prova om.
+                log.error(
+                    "Anthropic avvisade anropet: %s (status %s)",
+                    type(e).__name__,
+                    getattr(e, "status_code", None),
+                )
+                raise PipelineError(AI_ERROR_REASON) from None
             if attempt == settings.anthropic_max_attempts:
                 log.error(
                     "Anthropic otillgängligt efter %d försök: %s (status %s)",

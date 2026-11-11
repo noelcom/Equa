@@ -493,3 +493,41 @@ def test_cv_that_was_just_started_is_not_run_twice(
 
     assert _run(client, user, analysis["id"]).status_code == 409
     assert anthropic_fake.calls == []
+
+
+def test_ai_error_that_is_not_transient_fails_the_cv_with_a_clear_reason(
+    client, make_user, anthropic_fake
+):
+    import anthropic
+
+    _flaky(anthropic_fake, "assess", _status_error(anthropic.BadRequestError, 400), 99)
+    user = make_user()
+    analysis = _analysis(client, user, [("a.pdf", cv("Utvecklare.\nPOÄNG 66"))])
+
+    _run(client, user, analysis["id"])
+
+    candidate = _get(client, user, analysis["id"])["candidates"][0]
+    assert candidate["status"] == "failed"
+    assert candidate["assessment"] is None
+    assert "AI-tjänsten" in candidate["failure_reason"]
+    assert "Oväntat" not in candidate["failure_reason"]
+
+
+def test_empty_assessment_answer_fails_the_cv_instead_of_scoring_it_zero(
+    client, make_user, anthropic_fake
+):
+    from types import SimpleNamespace
+
+    def empty(**kwargs):
+        return SimpleNamespace(parsed_output=None, stop_reason="refusal")
+
+    anthropic_fake.parse = empty
+    user = make_user()
+    analysis = _analysis(client, user, [("a.pdf", cv("Utvecklare.\nPOÄNG 66"))])
+
+    _run(client, user, analysis["id"])
+
+    candidate = _get(client, user, analysis["id"])["candidates"][0]
+    assert candidate["status"] == "failed"
+    assert candidate["assessment"] is None
+    assert "tolkas" in candidate["failure_reason"]
