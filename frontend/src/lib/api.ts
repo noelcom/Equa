@@ -96,7 +96,7 @@ export async function runAnalysis(id: string): Promise<Analysis> {
   return res.json();
 }
 
-// Avslöja: laddar ner originalfilen för en kandidat. Loggas inte (ADR 0004).
+// Avslöja: laddar ner originalfilen för en kandidat. Loggas inte (ADR 0007).
 export async function revealCandidate(analysisId: string, number: number): Promise<void> {
   const res = await authedFetch(`/analyses/${analysisId}/candidates/${number}/original`);
   if (!res.ok) throw new Error(await errorMessage(res, "Kunde inte avslöja kandidaten"));

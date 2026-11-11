@@ -1,4 +1,4 @@
-"""Radering av analyser, kandidater och originalfiler (ADR 0004).
+"""Radering av analyser, kandidater och originalfiler (ADR 0007).
 
 Databasens `on delete cascade` tar bort kandidatraderna men inte storage-objekten,
 så filerna tas bort uttryckligen och före raderna (sökvägarna finns bara i raderna).
@@ -15,7 +15,7 @@ from equa_backend.pipeline import BUCKET
 
 logger = logging.getLogger(__name__)
 
-# Backendens tak för raderingstid. Profilen kan sänka det men aldrig höja det (ADR 0004).
+# Backendens tak för raderingstid. Profilen kan sänka det men aldrig höja det (ADR 0007).
 SYSTEM_MAX_RETENTION_DAYS = 90
 # Antal analyser som hämtas per omgång i jobbet.
 PURGE_BATCH = 200
@@ -27,7 +27,7 @@ def max_retention_days(profile: dict) -> int:
 
 
 def default_retention_days(profile: dict) -> int:
-    """Förvalet, aldrig över taket (ADR 0004)."""
+    """Förvalet, aldrig över taket (ADR 0007)."""
     return min(profile["default_retention_days"], max_retention_days(profile))
 
 
@@ -77,7 +77,7 @@ def purge_expired(supabase: Client) -> int:
 
 
 async def purge_loop(supabase: Client, interval_seconds: float) -> None:
-    """Kör raderingsjobbet om och om igen. Det kan inte stängas av (ADR 0004)."""
+    """Kör raderingsjobbet om och om igen. Det kan inte stängas av (ADR 0007)."""
     while True:
         try:
             await asyncio.to_thread(purge_expired, supabase)

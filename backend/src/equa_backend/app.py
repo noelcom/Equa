@@ -12,7 +12,7 @@ from equa_backend.routes import analyses, me
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Timvis raderingsjobb (ADR 0004). Går inte att stänga av. Flera instanser är ofarligt,
+    # Timvis raderingsjobb (ADR 0007). Går inte att stänga av. Flera instanser är ofarligt,
     # eftersom radering av redan raderade analyser är en tom operation.
     task = asyncio.create_task(
         purge_loop(get_supabase(), get_settings().purge_interval_seconds)

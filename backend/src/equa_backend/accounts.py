@@ -1,4 +1,4 @@
-"""Radering av ett användarkonto (#14, ADR 0004 och 0006).
+"""Radering av ett användarkonto (#14, ADR 0007 och 0006).
 
 Det görs bara av Equas ägare, via skriptet längst ned. Det finns inget API-anrop och inget UI.
 Användningsloggen (`usage_logs`) rörs aldrig: den är permanent och anonym.

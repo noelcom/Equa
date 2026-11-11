@@ -46,7 +46,7 @@ PDF_MAGIC = b"%PDF-"
 
 
 class CandidateOut(BaseModel):
-    # Anonym alias. Originalfilnamn visas aldrig (ADR 0004).
+    # Anonym alias. Originalfilnamn visas aldrig (ADR 0007).
     alias: str
     # Löpnummer i analysen. Adresserar kandidaten, t.ex. vid avslöja.
     number: int
@@ -197,7 +197,7 @@ def create_analysis(
     if expires_at is None:
         expires_at = now + timedelta(days=default_retention_days(profile))
     else:
-        expires_at = _checked_expiry(expires_at, now, profile)
+        expires_at = _checked_expiry(expires_at, profile)
     analysis = (
         supabase.table("analysis_batches")
         .insert(
@@ -344,7 +344,7 @@ def reveal_candidate(
 ) -> Response:
     """Avslöja: originalfilen för en kandidat. Det enda sättet identiteten visas.
 
-    Avslöjanden loggas medvetet inte (ADR 0004).
+    Avslöjanden loggas medvetet inte (ADR 0007).
     """
     analysis = _own_analysis(supabase, user, analysis_id)
     candidate = next(
@@ -355,7 +355,7 @@ def reveal_candidate(
     try:
         data = supabase.storage.from_(BUCKET).download(candidate.original_path)
     except StorageException:
-        # Originalfilen kan redan ha raderats (raderingsdatum, ADR 0004).
+        # Originalfilen kan redan ha raderats (raderingsdatum, ADR 0007).
         raise HTTPException(
             status.HTTP_404_NOT_FOUND, "Originalfilen finns inte längre."
         ) from None
@@ -395,8 +395,8 @@ class ExtendRequest(BaseModel):
     expires_at: datetime
 
 
-def _checked_expiry(expires_at: datetime, since: datetime, profile: dict) -> datetime:
-    """Validerar ett raderingsdatum mot taket, som räknas från `since` (skapandet)."""
+def _checked_expiry(expires_at: datetime, profile: dict) -> datetime:
+    """Validerar ett raderingsdatum mot taket, som räknas från idag (rullande tak, ADR 0007)."""
     if expires_at.tzinfo is None:
         expires_at = expires_at.replace(tzinfo=UTC)
     max_days = max_retention_days(profile)
@@ -405,7 +405,7 @@ def _checked_expiry(expires_at: datetime, since: datetime, profile: dict) -> dat
             status.HTTP_422_UNPROCESSABLE_CONTENT,
             "Raderingsdatumet måste ligga i framtiden.",
         )
-    if expires_at > since + timedelta(days=max_days):
+    if expires_at > datetime.now(UTC) + timedelta(days=max_days):
         raise HTTPException(
             status.HTTP_422_UNPROCESSABLE_CONTENT,
             f"Raderingsdatumet får ligga högst {max_days} dagar fram.",
@@ -420,13 +420,12 @@ def extend_analysis(
     user: Annotated[CurrentUser, Depends(get_current_user)],
     supabase: Annotated[Client, Depends(get_supabase)],
 ) -> AnalysisOut:
-    """Flyttar fram raderingsdatumet, högst till taket räknat från skapandet."""
+    """Flyttar fram raderingsdatumet, högst till taket räknat från idag (rullande tak)."""
     analysis = _own_analysis(supabase, user, analysis_id)
     if datetime.fromisoformat(analysis["expires_at"]) <= datetime.now(UTC):
         # Utgången analys väntar bara på raderingsjobbet och kan inte återupplivas.
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Analysen finns inte.")
-    created_at = datetime.fromisoformat(analysis["created_at"])
-    expires_at = _checked_expiry(body.expires_at, created_at, _profile(supabase, user))
+    expires_at = _checked_expiry(body.expires_at, _profile(supabase, user))
     if expires_at <= datetime.fromisoformat(analysis["expires_at"]):
         raise HTTPException(
             status.HTTP_422_UNPROCESSABLE_CONTENT,

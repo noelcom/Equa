@@ -311,8 +311,8 @@ function AnalysisView({
   onDelete: () => void;
 }) {
   const [newDate, setNewDate] = useState("");
-  // Taket räknas från skapandet.
-  const latest = new Date(new Date(analysis.created_at).getTime() + maxRetentionDays * 86400_000);
+  // Rullande tak: det räknas från idag, inte från skapandet (ADR 0007).
+  const latest = new Date(Date.now() + maxRetentionDays * 86400_000);
   const ranked = analysis.candidates.filter((c) => c.status === "done");
   const waiting = analysis.candidates.filter(
     (c) => c.status === "uploaded" || c.status === "queued" || c.status === "processing",

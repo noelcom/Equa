@@ -531,3 +531,92 @@ def test_empty_assessment_answer_fails_the_cv_instead_of_scoring_it_zero(
     assert candidate["status"] == "failed"
     assert candidate["assessment"] is None
     assert "tolkas" in candidate["failure_reason"]
+
+
+def _usage_logs(admin, user):
+    return (
+        admin.table("usage_logs").select("*").eq("customer_id", user.id).execute().data
+    )
+
+
+def _candidate_count(admin, analysis_id):
+    return len(
+        admin.table("candidates")
+        .select("id")
+        .eq("analysis_id", analysis_id)
+        .execute()
+        .data
+    )
+
+
+def test_delete_now_in_the_middle_of_a_run_succeeds_and_nothing_is_recreated(
+    client, make_user, anthropic_fake, admin
+):
+    _configure(client, max_parallel_cvs=1)
+    user = make_user()
+    analysis = _analysis(client, user, [("a.pdf", cv("Utvecklare.\nPOÄNG 80"))])
+    statuses = []
+
+    def delete_now(_text):
+        res = client.delete(f"/analyses/{analysis['id']}", headers=user.auth)
+        statuses.append(res.status_code)
+
+    anthropic_fake.on_assess = delete_now
+
+    run = _run(client, user, analysis["id"])
+
+    assert statuses == [204]
+    assert run.status_code < 300  # körningen avslutades utan krasch
+    assert _candidate_count(admin, analysis["id"]) == 0
+    assert (
+        admin.table("analysis_batches")
+        .select("id")
+        .eq("id", analysis["id"])
+        .execute()
+        .data
+        == []
+    )
+    assert client.get(f"/analyses/{analysis['id']}", headers=user.auth).status_code == 404
+
+
+def test_purge_job_deleting_an_expired_analysis_mid_run_has_the_same_outcome(
+    client, make_user, anthropic_fake, admin
+):
+    from datetime import UTC, datetime, timedelta
+
+    from equa_backend.retention import purge_expired
+
+    _configure(client, max_parallel_cvs=1)
+    user = make_user()
+    analysis = _analysis(client, user, [("a.pdf", cv("Utvecklare.\nPOÄNG 80"))])
+
+    def expire_and_purge(_text):
+        admin.table("analysis_batches").update(
+            {"expires_at": (datetime.now(UTC) - timedelta(minutes=1)).isoformat()}
+        ).eq("id", analysis["id"]).execute()
+        purge_expired(admin)
+
+    anthropic_fake.on_assess = expire_and_purge
+
+    run = _run(client, user, analysis["id"])
+
+    assert run.status_code < 300
+    assert _candidate_count(admin, analysis["id"]) == 0
+    assert client.get(f"/analyses/{analysis['id']}", headers=user.auth).status_code == 404
+
+
+def test_cv_assessed_after_the_analysis_was_deleted_is_not_counted_but_tokens_are_logged(
+    client, make_user, anthropic_fake, admin
+):
+    _configure(client, max_parallel_cvs=1)
+    user = make_user()
+    analysis = _analysis(client, user, [("a.pdf", cv("Utvecklare.\nPOÄNG 80"))])
+    anthropic_fake.on_assess = lambda _t: client.delete(
+        f"/analyses/{analysis['id']}", headers=user.auth
+    )
+
+    _run(client, user, analysis["id"])
+
+    (log,) = _usage_logs(admin, user)
+    assert log["cv_count"] == 0
+    assert log["input_tokens"] > 0 and log["output_tokens"] > 0

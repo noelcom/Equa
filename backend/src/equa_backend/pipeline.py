@@ -1,7 +1,7 @@
 """Pipelinen som gör ett uppladdat CV till en anonym bedömning.
 
 Steg per CV: förtvätt, AI-tvätt, säkerhetskontroll, bedömning. Den tvättade
-texten finns bara i minnet under körningen och sparas aldrig (ADR 0004).
+texten finns bara i minnet under körningen och sparas aldrig (ADR 0007).
 """
 
 import logging
@@ -103,10 +103,12 @@ class PipelineError(Exception):
         self.reason = reason
 
 
-def _set(supabase: Client, candidate_id: str, **fields) -> None:
+def _set(supabase: Client, candidate_id: str, **fields) -> bool:
+    """Uppdaterar kandidaten. Returnerar False om raden inte finns (analysen raderades)."""
     # last_progress_at är en hjärtslagsstämpel: den visar att CV:t fortfarande arbetas på.
     fields["last_progress_at"] = datetime.now(UTC).isoformat()
-    supabase.table("candidates").update(fields).eq("id", candidate_id).execute()
+    res = supabase.table("candidates").update(fields).eq("id", candidate_id).execute()
+    return bool(res.data)
 
 
 AI_ERROR_REASON = "AI-tjänsten returnerade ett fel. Kontakta Equa om det upprepas."
@@ -246,7 +248,9 @@ def _process(
             raise PipelineError("Kunde inte anonymiseras säkert.")
         _set(supabase, candidate_id, step="assessment")
         assessment = _assess(client, settings, job_ad, washed, usage)
-        _set(
+        # Raderas analysen mitt i körningen träffar uppdateringen ingen rad. Då sparades
+        # ingenting och CV:t räknas inte mot kvoten, men tokens loggas ändå (ADR 0007).
+        usage.succeeded = _set(
             supabase,
             candidate_id,
             status="done",
@@ -254,7 +258,6 @@ def _process(
             failure_reason=None,
             **assessment.model_dump(),
         )
-        usage.succeeded = True
     except PipelineError as e:
         _set(
             supabase, candidate_id, status="failed", step=None, failure_reason=e.reason

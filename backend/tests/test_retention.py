@@ -80,7 +80,7 @@ def test_date_can_be_moved_forward_up_to_the_cap_but_never_over(client, make_use
     assert ok.status_code == 200
     assert abs(_days_left(ok.json()) - 60) < 0.01
 
-    # Taket räknas från skapandet, så datumet kan inte skjutas upp i det oändliga.
+    # Taket räknas från idag (ADR 0007): inget datum längre fram än 90 dagar godtas.
     over = client.patch(
         url, headers=user.auth, json={"expires_at": _in(days=91).isoformat()}
     )
@@ -229,3 +229,29 @@ def test_expired_analysis_cannot_be_revived_before_the_job_runs(
     )
 
     assert res.status_code == 404
+
+
+def test_analysis_older_than_the_cap_can_be_extended_to_the_cap_from_today_but_no_further(
+    client, make_user, admin
+):
+    user = make_user()
+    analysis = _create(client, user).json()
+    url = f"/analyses/{analysis['id']}"
+    # Analysen skapades för 100 dagar sedan och raderas snart (ADR 0007: rullande tak).
+    admin.table("analysis_batches").update(
+        {
+            "created_at": _in(days=-100).isoformat(),
+            "expires_at": _in(days=1).isoformat(),
+        }
+    ).eq("id", analysis["id"]).execute()
+
+    over = client.patch(
+        url, headers=user.auth, json={"expires_at": _in(days=91).isoformat()}
+    )
+    ok = client.patch(
+        url, headers=user.auth, json={"expires_at": _in(days=89).isoformat()}
+    )
+
+    assert over.status_code == 422
+    assert ok.status_code == 200
+    assert abs(_days_left(ok.json()) - 89) < 0.01
