@@ -568,17 +568,7 @@ def test_delete_now_in_the_middle_of_a_run_succeeds_and_nothing_is_recreated(
 
     assert statuses == [204]
     assert run.status_code == 202
-    assert _candidate_count(admin, analysis["id"]) == 0
-    assert (
-        admin.table("analysis_batches")
-        .select("id")
-        .eq("id", analysis["id"])
-        .execute()
-        .data
-        == []
-    )
-    assert client.get(f"/analyses/{analysis['id']}", headers=user.auth).status_code == 404
-    assert paths and not any(_file_exists(admin, p) for p in paths)
+    _assert_analysis_gone(client, admin, user, analysis["id"], paths)
 
 
 def test_purge_job_deleting_an_expired_analysis_mid_run_has_the_same_outcome(
@@ -604,9 +594,7 @@ def test_purge_job_deleting_an_expired_analysis_mid_run_has_the_same_outcome(
     run = _run(client, user, analysis["id"])
 
     assert run.status_code == 202
-    assert _candidate_count(admin, analysis["id"]) == 0
-    assert client.get(f"/analyses/{analysis['id']}", headers=user.auth).status_code == 404
-    assert paths and not any(_file_exists(admin, p) for p in paths)
+    _assert_analysis_gone(client, admin, user, analysis["id"], paths)
 
 
 def test_cv_assessed_after_the_analysis_was_deleted_is_not_counted_but_tokens_are_logged(
@@ -624,6 +612,52 @@ def test_cv_assessed_after_the_analysis_was_deleted_is_not_counted_but_tokens_ar
     (log,) = _usage_logs(admin, user)
     assert log["cv_count"] == 0
     assert log["input_tokens"] > 0 and log["output_tokens"] > 0
+
+
+def test_delete_now_during_the_ai_wash_succeeds_and_nothing_is_recreated(
+    client, make_user, anthropic_fake, admin
+):
+    _configure(client, max_parallel_cvs=1)
+    user = make_user()
+    analysis = _analysis(client, user, [("a.pdf", cv("Utvecklare.\nPOÄNG 80"))])
+    paths = _original_paths(admin, analysis["id"])
+    statuses = []
+
+    def delete_now_then_wash(text):
+        res = client.delete(f"/analyses/{analysis['id']}", headers=user.auth)
+        statuses.append(res.status_code)
+        return text
+
+    anthropic_fake.wash_override = delete_now_then_wash
+
+    run = _run(client, user, analysis["id"])
+
+    assert statuses == [204]
+    assert run.status_code == 202
+    _assert_analysis_gone(client, admin, user, analysis["id"], paths)
+    # Pipelinen kontrollerar inte om analysen finns kvar, så bedömningen skickas
+    # ändå. Både tvättens och bedömningens tokens loggas, men CV:t räknas inte
+    # mot kvoten (ADR 0007).
+    assert len(anthropic_fake.texts_sent("assess")) == 1
+    (log,) = _usage_logs(admin, user)
+    assert log["cv_count"] == 0
+    # Exakt två AI-anrop (tvätt + bedömning) à fakens fasta 100/50 tokens.
+    assert log["input_tokens"] == 2 * 100 and log["output_tokens"] == 2 * 50
+
+
+def _assert_analysis_gone(client, admin, user, analysis_id, paths):
+    """Varken analysrad, kandidatrader eller originalfiler finns kvar."""
+    assert _candidate_count(admin, analysis_id) == 0
+    assert (
+        admin.table("analysis_batches")
+        .select("id")
+        .eq("id", analysis_id)
+        .execute()
+        .data
+        == []
+    )
+    assert client.get(f"/analyses/{analysis_id}", headers=user.auth).status_code == 404
+    assert paths and not any(_file_exists(admin, p) for p in paths)
 
 
 def _original_paths(admin, analysis_id):
