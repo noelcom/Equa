@@ -60,6 +60,6 @@ Format: **Svensk term** (kodnamn) – definition. _Undvik:_ synonymer vi inte an
 
 **Körbara CV:n** (`runnable_count`) – de CV:n i en analys som nästa körning tar: uppladdade, plus fastnade. Backend jämför dem mot återstående kvot och svarar `can_run` och `addable_count`, så gränssnittet bara visar svaret.
 
-**Användningslogg** (`usage_logs`) – permanent, anonymiserad rad per körning: kund, tid, antal CV:n, tokens. Underlag för fakturering.
+**Användningslogg** (`usage_logs`) – permanent, anonymiserad rad per bearbetat CV: kund, tid, om det lyckades (`cv_count` 0 eller 1), tokens. Raden skrivs så fort CV:t är klart, så ett lyckat CV räknas mot kvoten redan medan resten av körningen pågår. Underlag för fakturering.
 
 **Originalfil** – den uppladdade PDF:en, lagrad krypterat tills raderingsdatum.

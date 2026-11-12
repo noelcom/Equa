@@ -222,10 +222,11 @@ def _assess(
 def _process(
     client: anthropic.Anthropic,
     settings: Settings,
+    customer_id: str,
     job_ad: str,
     candidate: Candidate,
-) -> Usage:
-    """Kör ett CV och returnerar dess förbrukning. Fel sparas på kandidaten, inte kastas."""
+) -> None:
+    """Kör ett CV och loggar dess förbrukning. Fel sparas på kandidaten, inte kastas."""
     usage = Usage()
     candidate_id = candidate.id
     # En egen klient per CV: supabase-py garanterar inte trådsäkerhet, och sju trådar på
@@ -272,7 +273,16 @@ def _process(
             step=None,
             failure_reason="Oväntat fel vid analysen.",
         )
-    return usage
+    # Loggas direkt per CV, så ett klart CV räknas mot kvoten medan resten av körningen
+    # pågår (GLOSSARY: Användningslogg). Ett CV utan tokens och utan resultat ger ingen rad.
+    if usage.succeeded or usage.input_tokens or usage.output_tokens:
+        write_usage_log(
+            supabase,
+            customer_id,
+            cv_count=int(usage.succeeded),
+            input_tokens=usage.input_tokens,
+            output_tokens=usage.output_tokens,
+        )
 
 
 def run_analysis(
@@ -285,22 +295,16 @@ def run_analysis(
 ) -> None:
     """Kör alla givna kandidater genom pipelinen, högst `max_parallel_cvs` åt gången.
 
-    Skriver en rad i användningsloggen när körningen är klar.
+    Varje CV skriver sin egen rad i användningsloggen när det är klart.
     """
     with ThreadPoolExecutor(max_workers=settings.max_parallel_cvs) as pool:
         futures = [
-            pool.submit(_process, client, settings, job_ad, candidate)
+            pool.submit(_process, client, settings, customer_id, job_ad, candidate)
             for candidate in candidates
         ]
-    usages = [f.result() for f in futures if f.exception() is None]
-    # Loggen skrivs först: lyckade CV:n är redan sparade och får inte förloras om nätet nedan faller.
-    write_usage_log(
-        supabase,
-        customer_id,
-        cv_count=sum(u.succeeded for u in usages),
-        input_tokens=sum(u.input_tokens for u in usages),
-        output_tokens=sum(u.output_tokens for u in usages),
-    )
+    for f in futures:
+        if f.exception() is not None:
+            log.error("Oväntat fel i pipelinen: %s", type(f.exception()).__name__)
     # Sista nätet: om en arbetare föll samtidigt som den försökte spara felet (t.ex. vid
     # ett nätverksavbrott) får CV:t inte stå som "pågår" för alltid.
     (

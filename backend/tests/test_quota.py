@@ -4,6 +4,8 @@ from datetime import UTC, datetime, timedelta
 
 from helpers import cv
 
+from equa_backend.config import get_settings
+
 CANDIDATE_FIELDS = {"score", "name", "alias", "original_path", "job_ad", "rationale"}
 
 
@@ -119,22 +121,24 @@ def test_usage_log_has_customer_time_count_and_tokens_but_no_candidate_data(
     analysis = _analysis(client, user, ["POÄNG 50", "POÄNG 60"])
     assert _run(client, user, analysis).status_code == 202
 
-    (log,) = _logs(admin, user)
+    logs = _logs(admin, user)
 
-    assert log["cv_count"] == 2
-    # Fejken svarar 100 in / 50 ut per anrop, två anrop (tvätt, bedömning) per CV.
-    assert log["input_tokens"] == 400
-    assert log["output_tokens"] == 200
-    assert log["created_at"]
-    assert not CANDIDATE_FIELDS & set(log)
-    assert set(log) == {
-        "id",
-        "customer_id",
-        "created_at",
-        "cv_count",
-        "input_tokens",
-        "output_tokens",
-    }
+    # En rad per CV, så att ett klart CV räknas direkt.
+    assert [log["cv_count"] for log in logs] == [1, 1]
+    for log in logs:
+        # Fejken svarar 100 in / 50 ut per anrop, två anrop (tvätt, bedömning) per CV.
+        assert log["input_tokens"] == 200
+        assert log["output_tokens"] == 100
+        assert log["created_at"]
+        assert not CANDIDATE_FIELDS & set(log)
+        assert set(log) == {
+            "id",
+            "customer_id",
+            "created_at",
+            "cv_count",
+            "input_tokens",
+            "output_tokens",
+        }
 
 
 def test_usage_log_survives_deleting_the_analysis(client, make_user, admin):
@@ -268,3 +272,26 @@ def test_run_response_counts_the_started_cvs_as_reserved(client, make_user, admi
 
     assert body["runnable_count"] == 0
     assert body["addable_count"] == 3
+
+
+def test_cv_finished_mid_run_counts_as_used_before_the_run_ends(
+    client, make_user, admin, anthropic_fake
+):
+    settings = get_settings().model_copy(update={"max_parallel_cvs": 1})
+    client.app.dependency_overrides[get_settings] = lambda: settings
+    user = make_user()
+    analysis = _analysis(client, user, ["POÄNG 50", "POÄNG 60"])
+    seen = []
+
+    def read_quota(text):
+        if "POÄNG 60" in text:  # det första CV:t är klart, det andra bedöms
+            seen.append(_me(client, user)["quota"])
+
+    anthropic_fake.on_assess = read_quota
+
+    assert _run(client, user, analysis).status_code == 202
+
+    (quota,) = seen
+    assert quota["used"] == 1
+    assert quota["reserved"] == 1
+    assert quota["remaining"] == 500 - 2
