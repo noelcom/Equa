@@ -5,7 +5,13 @@ def test_first_login_creates_profile_with_default_limits(client, make_user):
 
     assert res.status_code == 200
     assert res.json() == {
-        "quota": {"limit": 500, "used": 0, "remaining": 500},
+        "quota": {
+            "limit": 500,
+            "used": 0,
+            "remaining": 500,
+            "reserved": 0,
+            "pending": 0,
+        },
         "default_retention_days": 7,
         "max_retention_days": 90,
         "max_file_size_mb": 25,

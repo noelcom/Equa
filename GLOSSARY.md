@@ -56,6 +56,8 @@ Format: **Svensk term** (kodnamn) – definition. _Undvik:_ synonymer vi inte an
 
 **Reserverad** – ett CV som körs just nu och tillfälligt räknas av från kvoten tills utfallet är känt. Lyckas det räknas det som förbrukat, misslyckas det frigörs platsen. Uppladdade men ej körda CV:n är inte reserverade. _Undvik:_ låst, pågående förbrukning.
 
+**Väntande** (`pending`) – uppladdade men ej körda CV:n över alla kundens analyser. Visas i profilrutan som information och påverkar ingen kontroll, så kunden kan förbereda kommande analyser. _Undvik:_ reserverad.
+
 **Användningslogg** (`usage_logs`) – permanent, anonymiserad rad per körning: kund, tid, antal CV:n, tokens. Underlag för fakturering.
 
 **Originalfil** – den uppladdade PDF:en, lagrad krypterat tills raderingsdatum.

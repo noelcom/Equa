@@ -48,7 +48,7 @@ function writeSelected(id: string | null) {
   }
 }
 
-export function Analyses({ me }: { me: Me }) {
+export function Analyses({ me, onMeChanged }: { me: Me; onMeChanged: () => void }) {
   const [list, setList] = useState<AnalysisSummary[]>([]);
   const [selected, setSelected] = useState<Analysis | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -100,11 +100,15 @@ export function Analyses({ me }: { me: Me }) {
     if (!runningId) return;
     const timer = setInterval(() => {
       getAnalysis(runningId)
-        .then(setSelected)
+        .then((a) => {
+          setSelected(a);
+          // Körningen är klar: kvoten har ändrats.
+          if (a.state !== "running") onMeChanged();
+        })
         .catch((e: Error) => setError(e.message));
     }, POLL_MS);
     return () => clearInterval(timer);
-  }, [runningId]);
+  }, [runningId, onMeChanged]);
 
   async function extend(id: string, date: Date) {
     setError(null);
@@ -122,6 +126,7 @@ export function Analyses({ me }: { me: Me }) {
       await deleteAnalysis(id);
       await open(null);
       await refresh();
+      onMeChanged();
     } catch (e) {
       setError((e as Error).message);
     }
@@ -133,6 +138,8 @@ export function Analyses({ me }: { me: Me }) {
       setSelected(await runAnalysis(id));
     } catch (e) {
       setError((e as Error).message);
+    } finally {
+      onMeChanged();
     }
   }
 
@@ -147,7 +154,9 @@ export function Analyses({ me }: { me: Me }) {
           onAdded={(a) => {
             setSelected(a);
             void refresh();
+            onMeChanged();
           }}
+          remaining={me.quota.remaining}
           maxFileSizeMb={me.max_file_size_mb}
           maxRetentionDays={me.max_retention_days}
           onExtend={(d) => void extend(selected.id, d)}
@@ -159,6 +168,7 @@ export function Analyses({ me }: { me: Me }) {
             me={me}
             onCreated={async (a) => {
               await refresh();
+              onMeChanged();
               setSelected(a);
               writeSelected(a.id);
             }}
@@ -179,6 +189,7 @@ function NewAnalysis({ me, onCreated }: { me: Me; onCreated: (a: Analysis) => vo
   const [mountedAt] = useState(() => Date.now());
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const overQuota = files.length > me.quota.remaining;
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -235,6 +246,7 @@ function NewAnalysis({ me, onCreated }: { me: Me; onCreated: (a: Analysis) => vo
           onChange={(e) => setFiles(Array.from(e.target.files ?? []))}
         />
       </label>
+      {overQuota && <QuotaNotice max={me.quota.remaining} />}
       <label className="flex flex-col gap-1 text-sm">
         Raderingsdatum
         <select
@@ -263,7 +275,10 @@ function NewAnalysis({ me, onCreated }: { me: Me; onCreated: (a: Analysis) => vo
         Analysen och originalfilerna raderas automatiskt vid raderingsdatumet. Längsta tillåtna
         tid är {me.max_retention_days} dagar. Raderingen kan inte stängas av.
       </p>
-      <button disabled={busy} className="rounded bg-black p-2 text-white disabled:opacity-50">
+      <button
+        disabled={busy || overQuota}
+        className="rounded bg-black p-2 text-white disabled:opacity-50"
+      >
         {busy ? "Laddar upp…" : "Skapa analys"}
       </button>
       {error && <p className="text-sm text-red-600">{error}</p>}
@@ -306,6 +321,7 @@ function AnalysisView({
   onBack,
   onRun,
   onAdded,
+  remaining,
   maxFileSizeMb,
   maxRetentionDays,
   onExtend,
@@ -315,6 +331,7 @@ function AnalysisView({
   onBack: () => void;
   onRun: () => void;
   onAdded: (a: Analysis) => void;
+  remaining: number;
   maxFileSizeMb: number;
   maxRetentionDays: number;
   onExtend: (date: Date) => void;
@@ -341,6 +358,14 @@ function AnalysisView({
     return () => clearTimeout(timer);
   }, [running, progressKey]);
   const stalled = running && stalledKey === progressKey;
+  // Samma regel som backend: körningen nekas om den har fler CV:n än kvoten räcker till.
+  const runBlocked = analysis.runnable_count > remaining;
+  const runBlockedNotice = runBlocked && (
+    <p className="text-sm text-zinc-600">
+      Analysen har {analysis.runnable_count} CV:n att köra men du har {remaining} kvar den här
+      månaden. Kvoten fylls på den {nextMonthStart()}.
+    </p>
+  );
 
   return (
     <div className="flex flex-col gap-3">
@@ -378,12 +403,25 @@ function AnalysisView({
         </button>
       </div>
 
-      <AddCvs analysisId={analysis.id} maxFileSizeMb={maxFileSizeMb} onAdded={onAdded} />
+      <AddCvs
+        analysisId={analysis.id}
+        // Analysens ej körda CV:n räknas med, så det som laddas upp också går att köra.
+        max={Math.max(remaining - analysis.runnable_count, 0)}
+        maxFileSizeMb={maxFileSizeMb}
+        onAdded={onAdded}
+      />
 
       {analysis.state === "ready" && (
-        <button onClick={onRun} className="self-start rounded bg-black px-4 py-2 text-white">
-          Starta analys
-        </button>
+        <div className="flex flex-col gap-1">
+          <button
+            onClick={onRun}
+            disabled={runBlocked}
+            className="self-start rounded bg-black px-4 py-2 text-white disabled:opacity-50"
+          >
+            Starta analys
+          </button>
+          {runBlockedNotice}
+        </div>
       )}
       {analysis.state === "running" && (
         <div className="flex flex-col gap-1" role="status">
@@ -396,9 +434,14 @@ function AnalysisView({
               <p className="text-sm text-zinc-600">
                 Det verkar ha hakat upp sig. Du kan ta om de CV:n som inte blev klara.
               </p>
-              <button onClick={onRun} className="self-start rounded bg-black px-4 py-2 text-white">
+              <button
+                onClick={onRun}
+                disabled={runBlocked}
+                className="self-start rounded bg-black px-4 py-2 text-white disabled:opacity-50"
+              >
                 Ta om fastnade CV:n
               </button>
+              {runBlockedNotice}
             </div>
           )}
         </div>
@@ -454,10 +497,13 @@ function AnalysisView({
 // och raderingsdatumet ändras inte.
 function AddCvs({
   analysisId,
+  max,
   maxFileSizeMb,
   onAdded,
 }: {
   analysisId: string;
+  // Så många CV:n till ryms i kvoten.
+  max: number;
   maxFileSizeMb: number;
   onAdded: (a: Analysis) => void;
 }) {
@@ -466,6 +512,7 @@ function AddCvs({
   const [inputKey, setInputKey] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const overQuota = files.length > max;
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -500,8 +547,9 @@ function AddCvs({
           onChange={(e) => setFiles(Array.from(e.target.files ?? []))}
         />
       </label>
+      {overQuota && <QuotaNotice max={max} />}
       <button
-        disabled={busy || files.length === 0}
+        disabled={busy || files.length === 0 || overQuota}
         className="self-start rounded border border-zinc-300 px-3 py-1 disabled:opacity-50"
       >
         {busy ? "Laddar upp…" : "Lägg till CV:n"}
@@ -562,6 +610,22 @@ function Detail({ label, children }: { label: string; children: React.ReactNode 
       <dd className="text-zinc-700">{children}</dd>
     </div>
   );
+}
+
+// Neutral notis (inte ett fel): rekryteraren har valt fler filer än kvoten räcker till.
+function QuotaNotice({ max }: { max: number }) {
+  return (
+    <p className="text-sm text-zinc-600" role="status">
+      Du kan ladda upp högst {max} CV:n till.
+    </p>
+  );
+}
+
+// "1 december": när kvoten fylls på. Kvoten räknas per kalendermånad i UTC.
+function nextMonthStart(): string {
+  const now = new Date();
+  const next = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1));
+  return `1 ${next.toLocaleDateString("sv-SE", { month: "long", timeZone: "UTC" })}`;
 }
 
 function formatDate(iso: string): string {

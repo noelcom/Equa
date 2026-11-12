@@ -74,6 +74,8 @@ class AnalysisOut(BaseModel):
     created_at: datetime
     # ready: det finns CV:n att köra. running: en körning pågår. finished: inget mer att köra.
     state: Literal["ready", "running", "finished"]
+    # CV:n som nästa körning tar: uppladdade, plus fastnade (se Candidate.is_runnable).
+    runnable_count: int
     progress: Progress
     # Leaderboard: bedömda kandidater efter poäng (högst först), därefter övriga
     # i nummerordning. Ingen kandidat filtreras bort (ADR 0003).
@@ -133,7 +135,9 @@ def _state(candidates: list[Candidate]) -> Literal["ready", "running", "finished
     return "finished"
 
 
-def _to_out(analysis: dict, candidates: list[Candidate]) -> AnalysisOut:
+def _to_out(
+    analysis: dict, candidates: list[Candidate], stale_before: datetime
+) -> AnalysisOut:
     return AnalysisOut(
         id=analysis["id"],
         title=analysis["title"],
@@ -141,12 +145,18 @@ def _to_out(analysis: dict, candidates: list[Candidate]) -> AnalysisOut:
         expires_at=analysis["expires_at"],
         created_at=analysis["created_at"],
         state=_state(candidates),
+        runnable_count=sum(c.is_runnable(stale_before) for c in candidates),
         progress=Progress(
             total=len(candidates),
             finished=sum(c.status in FINISHED for c in candidates),
         ),
         candidates=[_candidate_out(c) for c in sorted(candidates, key=_rank_key)],
     )
+
+
+def _stale_before(settings: Settings) -> datetime:
+    """Gränsen för när ett pågående CV räknas som fastnat."""
+    return datetime.now(UTC) - timedelta(minutes=settings.stale_cv_minutes)
 
 
 def _profile(supabase: Client, user: CurrentUser) -> dict:
@@ -163,6 +173,7 @@ def _profile(supabase: Client, user: CurrentUser) -> dict:
 def create_analysis(
     user: Annotated[CurrentUser, Depends(get_current_user)],
     supabase: Annotated[Client, Depends(get_supabase)],
+    settings: Annotated[Settings, Depends(get_settings)],
     title: Annotated[str, Form()],
     job_ad: Annotated[str, Form()],
     files: list[UploadFile],
@@ -177,6 +188,8 @@ def create_analysis(
 
     profile = _profile(supabase, user)
     contents = _read_pdfs(files, profile, first_number=1)
+    stale_before = _stale_before(settings)
+    _check_quota(supabase, user, [], stale_before, adding=len(contents), creating=True)
 
     now = datetime.now(UTC)
     if expires_at is None:
@@ -205,7 +218,7 @@ def create_analysis(
         # Städa upp så en misslyckad uppladdning inte lämnar kvar en tom analys.
         supabase.table("analysis_batches").delete().eq("id", analysis["id"]).execute()
         raise
-    return _to_out(analysis, candidates)
+    return _to_out(analysis, candidates, stale_before)
 
 
 @router.post(
@@ -228,7 +241,7 @@ def add_candidates(
     existing = _candidates(analysis["candidates"])
     first_number = max((c.number for c in existing), default=0) + 1
     contents = _read_pdfs(files, _profile(supabase, user), first_number)
-    stale_before = datetime.now(UTC) - timedelta(minutes=settings.stale_cv_minutes)
+    stale_before = _stale_before(settings)
     _check_quota(supabase, user, existing, stale_before, adding=len(contents))
     try:
         added = _store_candidates(
@@ -242,7 +255,7 @@ def add_candidates(
             status.HTTP_409_CONFLICT,
             "CV:n lades till samtidigt från ett annat håll. Försök igen.",
         ) from None
-    return _to_out(analysis, existing + added)
+    return _to_out(analysis, existing + added, stale_before)
 
 
 def _read_pdfs(
@@ -331,10 +344,13 @@ def get_analysis(
     analysis_id: uuid.UUID,
     user: Annotated[CurrentUser, Depends(get_current_user)],
     supabase: Annotated[Client, Depends(get_supabase)],
+    settings: Annotated[Settings, Depends(get_settings)],
 ) -> AnalysisOut:
     # Filtrera på user_id: andras analyser ser ut som att de inte finns.
     analysis = _own_analysis(supabase, user, analysis_id)
-    return _to_out(analysis, _candidates(analysis["candidates"]))
+    return _to_out(
+        analysis, _candidates(analysis["candidates"]), _stale_before(settings)
+    )
 
 
 @router.post(
@@ -386,6 +402,7 @@ def run_analysis(
     for c in candidates:
         if c.id in claimed_ids:
             c.status = "queued"
+            c.last_progress_at = now
     background.add_task(
         pipeline.run_analysis,
         supabase,
@@ -395,7 +412,7 @@ def run_analysis(
         analysis["job_ad"],
         claimed,
     )
-    return _to_out(analysis, candidates)
+    return _to_out(analysis, candidates, stale_before)
 
 
 @router.get("/{analysis_id}/candidates/{number}/original")
@@ -436,6 +453,7 @@ def _check_quota(
     candidates: list[Candidate],
     stale_before: datetime,
     adding: int = 0,
+    creating: bool = False,
 ) -> None:
     """Stoppar en körning, eller ett tillägg, som skulle överskrida månadskvoten.
 
@@ -451,7 +469,11 @@ def _check_quota(
     remaining = quota_remaining(supabase, user.id, limit, stale_before)
     if to_run > remaining:
         if adding:
-            attempt = f"analysen skulle få {to_run} CV:n att köra"
+            attempt = (
+                f"du försöker ladda upp {to_run} CV:n"
+                if creating
+                else f"analysen skulle få {to_run} CV:n att köra"
+            )
             outcome = "Inga CV:n sparades."
         else:
             attempt = f"du försöker köra {to_run} CV:n"
@@ -491,6 +513,7 @@ def extend_analysis(
     body: ExtendRequest,
     user: Annotated[CurrentUser, Depends(get_current_user)],
     supabase: Annotated[Client, Depends(get_supabase)],
+    settings: Annotated[Settings, Depends(get_settings)],
 ) -> AnalysisOut:
     """Flyttar fram raderingsdatumet, högst till taket räknat från idag (rullande tak)."""
     analysis = _live_analysis(supabase, user, analysis_id)
@@ -507,7 +530,9 @@ def extend_analysis(
         .execute()
         .data[0]["expires_at"]
     )
-    return _to_out(analysis, _candidates(analysis["candidates"]))
+    return _to_out(
+        analysis, _candidates(analysis["candidates"]), _stale_before(settings)
+    )
 
 
 @router.delete("/{analysis_id}", status_code=status.HTTP_204_NO_CONTENT)

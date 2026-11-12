@@ -37,7 +37,7 @@ def used_this_month(supabase: Client, customer_id: str) -> int:
         offset += PAGE
 
 
-def _reserved(supabase: Client, customer_id: str, stale_before: datetime) -> int:
+def reserved(supabase: Client, customer_id: str, stale_before: datetime) -> int:
     """CV:n som körs just nu (ej fastnade) i kundens analyser.
 
     De är inte loggade än men kan komma att räknas mot kvoten, så de reserveras.
@@ -59,13 +59,27 @@ def _reserved(supabase: Client, customer_id: str, stale_before: datetime) -> int
     )
 
 
+def pending(supabase: Client, customer_id: str) -> int:
+    """Uppladdade men ej körda CV:n i alla kundens analyser. Bara information, ingen kontroll."""
+    return (
+        supabase.table("candidates")
+        .select("id, analysis_batches!inner(user_id)", count="exact")
+        .eq("status", "uploaded")
+        .eq("analysis_batches.user_id", customer_id)
+        .limit(1)
+        .execute()
+        .count
+        or 0
+    )
+
+
 def remaining(
     supabase: Client, customer_id: str, limit: int, stale_before: datetime
 ) -> int:
     """Återstående kvot, med pågående CV:n reserverade. Delas av /me och körningskontrollen."""
     used = used_this_month(supabase, customer_id)
-    reserved = _reserved(supabase, customer_id, stale_before)
-    return max(limit - used - reserved, 0)
+    held = reserved(supabase, customer_id, stale_before)
+    return max(limit - used - held, 0)
 
 
 def write_usage_log(

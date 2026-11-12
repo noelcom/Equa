@@ -1,7 +1,16 @@
 import { supabase } from "./supabase";
 
 export type Me = {
-  quota: { limit: number; used: number };
+  quota: {
+    limit: number;
+    used: number;
+    // Kvoten minus månadens lyckade och de reserverade CV:na. Avgör vad som får laddas upp och köras.
+    remaining: number;
+    // CV:n som körs just nu och räknas av tillfälligt.
+    reserved: number;
+    // Uppladdade men ej körda CV:n i alla analyser. Bara information.
+    pending: number;
+  };
   default_retention_days: number;
   max_retention_days: number;
   max_file_size_mb: number;
@@ -37,6 +46,8 @@ export type Analysis = {
   created_at: string;
   // ready: det finns CV:n att köra. running: körning pågår. finished: inget mer att köra.
   state: "ready" | "running" | "finished";
+  // CV:n som nästa körning tar (uppladdade och fastnade). Samma siffra som backend kontrollerar mot kvoten.
+  runnable_count: number;
   progress: { total: number; finished: number };
   // Bedömda kandidater efter poäng (högst först), därefter övriga i nummerordning.
   candidates: Candidate[];

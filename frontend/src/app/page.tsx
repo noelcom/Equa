@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import type { Session } from "@supabase/supabase-js";
 import { getMe, type Me } from "@/lib/api";
 import { supabase } from "@/lib/supabase";
@@ -69,9 +69,16 @@ function Profile({ email }: { email: string }) {
   const [me, setMe] = useState<Me | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
-    getMe().then(setMe).catch((e: Error) => setError(e.message));
+  // Hämtas om efter skapande, tillägg och körning, så kvoten i rutan och formulären stämmer.
+  const refreshMe = useCallback(() => {
+    getMe()
+      .then(setMe)
+      .catch((e: Error) => setError(e.message));
   }, []);
+
+  useEffect(() => {
+    refreshMe();
+  }, [refreshMe]);
 
   return (
     <section className="flex flex-col gap-3">
@@ -80,15 +87,21 @@ function Profile({ email }: { email: string }) {
       {me && (
         <div className="rounded border border-zinc-300 p-4">
           <p className="font-medium">
-            Månadskvot: {me.quota.used} av {me.quota.limit} CV:n använda
+            {me.quota.remaining} kvar av {me.quota.limit} den här månaden ({me.quota.used}{" "}
+            använda, {me.quota.reserved} körs just nu)
           </p>
+          {me.quota.pending > 0 && (
+            <p className="text-sm text-zinc-600">
+              {me.quota.pending} uppladdade CV:n väntar på körning
+            </p>
+          )}
           <p className="text-sm text-zinc-600">
             Raderingstid: {me.default_retention_days} dagar som standard, högst{" "}
             {me.max_retention_days} dagar. Största fil: {me.max_file_size_mb} MB.
           </p>
         </div>
       )}
-      {me && <Analyses me={me} />}
+      {me && <Analyses me={me} onMeChanged={refreshMe} />}
       <button onClick={() => supabase.auth.signOut()} className="self-start text-sm underline">
         Logga ut
       </button>
