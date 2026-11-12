@@ -50,7 +50,7 @@ Format: **Svensk term** (kodnamn) – definition. _Undvik:_ synonymer vi inte an
 
 **Raderingsdatum** (`expires_at`, TTL) – när analysen och dess originalfiler raderas automatiskt. Standard 7 dagar, valbart eget datum. Taket är 90 dagar från den dag datumet sätts, så kunden kan förlänga aktivt hur många gånger som helst. Raderingen går igenom även mitt i en körning.
 
-**Kvot** (`cv_quota_limit`) – max antal lyckade CV:n per kalendermånad, standard 500. Kontrolleras före en körning. Ett CV är lyckat först när bedömningen är sparad, så ett CV vars analys raderades under körningen räknas inte.
+**Kvot** (`cv_quota_limit`) – max antal lyckade CV:n per kalendermånad, standard 500. Kontrolleras före en körning, och före tillägg av CV:n (analysens ej körda CV:n plus de nya), så det som laddas upp också går att köra. Ett CV är lyckat först när bedömningen är sparad, så ett CV vars analys raderades under körningen räknas inte.
 
 **Användningslogg** (`usage_logs`) – permanent, anonymiserad rad per körning: kund, tid, antal CV:n, tokens. Underlag för fakturering.
 

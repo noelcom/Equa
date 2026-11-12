@@ -126,6 +126,15 @@ export async function createAnalysis(
   return res.json();
 }
 
+// Lägger till CV:n i en befintlig analys. De körs sedan med "Starta analys" mot samma annons.
+export async function addCandidates(id: string, files: File[]): Promise<Analysis> {
+  const form = new FormData();
+  for (const f of files) form.append("files", f);
+  const res = await authedFetch(`/analyses/${id}/candidates`, { method: "POST", body: form });
+  if (!res.ok) throw new Error(await errorMessage(res, "Kunde inte lägga till CV:n"));
+  return res.json();
+}
+
 // Flyttar fram raderingsdatumet. Backend avvisar datum över taket.
 export async function extendAnalysis(id: string, expiresAt: Date): Promise<Analysis> {
   const res = await authedFetch(`/analyses/${id}`, {

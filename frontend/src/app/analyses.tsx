@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import {
+  addCandidates,
   createAnalysis,
   deleteAnalysis,
   extendAnalysis,
@@ -143,6 +144,11 @@ export function Analyses({ me }: { me: Me }) {
           analysis={selected}
           onBack={() => void open(null)}
           onRun={() => void startRun(selected.id)}
+          onAdded={(a) => {
+            setSelected(a);
+            void refresh();
+          }}
+          maxFileSizeMb={me.max_file_size_mb}
           maxRetentionDays={me.max_retention_days}
           onExtend={(d) => void extend(selected.id, d)}
           onDelete={() => void remove(selected.id)}
@@ -299,6 +305,8 @@ function AnalysisView({
   analysis,
   onBack,
   onRun,
+  onAdded,
+  maxFileSizeMb,
   maxRetentionDays,
   onExtend,
   onDelete,
@@ -306,6 +314,8 @@ function AnalysisView({
   analysis: Analysis;
   onBack: () => void;
   onRun: () => void;
+  onAdded: (a: Analysis) => void;
+  maxFileSizeMb: number;
   maxRetentionDays: number;
   onExtend: (date: Date) => void;
   onDelete: () => void;
@@ -367,6 +377,8 @@ function AnalysisView({
           Radera direkt
         </button>
       </div>
+
+      <AddCvs analysisId={analysis.id} maxFileSizeMb={maxFileSizeMb} onAdded={onAdded} />
 
       {analysis.state === "ready" && (
         <button onClick={onRun} className="self-start rounded bg-black px-4 py-2 text-white">
@@ -435,6 +447,67 @@ function AnalysisView({
         </div>
       )}
     </div>
+  );
+}
+
+// Fler CV:n till samma analys. De bedöms mot samma annons när analysen startas igen,
+// och raderingsdatumet ändras inte.
+function AddCvs({
+  analysisId,
+  maxFileSizeMb,
+  onAdded,
+}: {
+  analysisId: string;
+  maxFileSizeMb: number;
+  onAdded: (a: Analysis) => void;
+}) {
+  const [files, setFiles] = useState<File[]>([]);
+  // Byts efter en lyckad uppladdning så att filväljaren töms.
+  const [inputKey, setInputKey] = useState(0);
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  async function onSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    setError(null);
+    // Snabb kontroll i webbläsaren. Backend gör den skarpa kontrollen.
+    if (files.some((f) => f.size > maxFileSizeMb * 1024 * 1024)) {
+      setError(`Ett CV är större än den tillåtna filstorleken på ${maxFileSizeMb} MB.`);
+      return;
+    }
+    setBusy(true);
+    try {
+      onAdded(await addCandidates(analysisId, files));
+      setFiles([]);
+      setInputKey((k) => k + 1);
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <form onSubmit={onSubmit} className="flex flex-col gap-2 text-sm">
+      <label className="flex flex-col gap-1">
+        Lägg till fler CV:n som PDF (högst {maxFileSizeMb} MB per fil)
+        <input
+          key={inputKey}
+          type="file"
+          accept="application/pdf"
+          multiple
+          required
+          onChange={(e) => setFiles(Array.from(e.target.files ?? []))}
+        />
+      </label>
+      <button
+        disabled={busy || files.length === 0}
+        className="self-start rounded border border-zinc-300 px-3 py-1 disabled:opacity-50"
+      >
+        {busy ? "Laddar upp…" : "Lägg till CV:n"}
+      </button>
+      {error && <p className="text-red-600">{error}</p>}
+    </form>
   );
 }
 

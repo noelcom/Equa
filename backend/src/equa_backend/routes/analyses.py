@@ -13,6 +13,7 @@ from fastapi import (
     status,
 )
 from fastapi.responses import Response
+from postgrest.exceptions import APIError
 from pydantic import BaseModel
 from storage3.exceptions import StorageException
 from supabase import Client
@@ -43,6 +44,8 @@ from equa_backend.retention import (
 router = APIRouter(prefix="/analyses")
 
 PDF_MAGIC = b"%PDF-"
+# Postgres felkod för brott mot en unik-begränsning.
+UNIQUE_VIOLATION = "23505"
 
 
 class CandidateOut(BaseModel):
@@ -173,25 +176,7 @@ def create_analysis(
         )
 
     profile = _profile(supabase, user)
-    max_bytes = profile["max_file_size_mb"] * 1024 * 1024
-
-    # Validera alla filer innan något sparas, så en avvisad fil inte lämnar halva analyser.
-    contents: list[bytes] = []
-    for number, f in enumerate(files, start=1):
-        # Vanlig def-endpoint: blockerande I/O körs i trådpool, inte på event-loopen.
-        data = f.file.read(max_bytes + 1)
-        if len(data) > max_bytes:
-            raise HTTPException(
-                status.HTTP_413_CONTENT_TOO_LARGE,
-                f"Kandidat #{number} är större än den tillåtna filstorleken "
-                f"på {profile['max_file_size_mb']} MB. Inga CV:n sparades.",
-            )
-        if not data.startswith(PDF_MAGIC):
-            raise HTTPException(
-                status.HTTP_400_BAD_REQUEST,
-                f"Kandidat #{number} är inte en PDF-fil. Bara PDF stöds. Inga CV:n sparades.",
-            )
-        contents.append(data)
+    contents = _read_pdfs(files, profile, first_number=1)
 
     now = datetime.now(UTC)
     if expires_at is None:
@@ -212,30 +197,108 @@ def create_analysis(
         .data[0]
     )
 
+    try:
+        candidates = _store_candidates(
+            supabase, user, analysis["id"], contents, first_number=1
+        )
+    except Exception:
+        # Städa upp så en misslyckad uppladdning inte lämnar kvar en tom analys.
+        supabase.table("analysis_batches").delete().eq("id", analysis["id"]).execute()
+        raise
+    return _to_out(analysis, candidates)
+
+
+@router.post(
+    "/{analysis_id}/candidates",
+    status_code=status.HTTP_201_CREATED,
+    response_model=AnalysisOut,
+)
+def add_candidates(
+    analysis_id: uuid.UUID,
+    user: Annotated[CurrentUser, Depends(get_current_user)],
+    supabase: Annotated[Client, Depends(get_supabase)],
+    settings: Annotated[Settings, Depends(get_settings)],
+    files: list[UploadFile],
+) -> AnalysisOut:
+    """Lägger till CV:n i en befintlig analys. De körs sedan via /run mot samma annons.
+
+    Raderingsdatumet ändras inte.
+    """
+    analysis = _live_analysis(supabase, user, analysis_id)
+    existing = _candidates(analysis["candidates"])
+    first_number = max((c.number for c in existing), default=0) + 1
+    contents = _read_pdfs(files, _profile(supabase, user), first_number)
+    stale_before = datetime.now(UTC) - timedelta(minutes=settings.stale_cv_minutes)
+    _check_quota(supabase, user, existing, stale_before, adding=len(contents))
+    try:
+        added = _store_candidates(
+            supabase, user, analysis["id"], contents, first_number
+        )
+    except APIError as e:
+        if e.code != UNIQUE_VIOLATION:
+            raise
+        # Ett samtidigt tillägg tog samma kandidatnummer. Filerna är redan städade.
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "CV:n lades till samtidigt från ett annat håll. Försök igen.",
+        ) from None
+    return _to_out(analysis, existing + added)
+
+
+def _read_pdfs(
+    files: list[UploadFile], profile: dict, first_number: int
+) -> list[bytes]:
+    """Läser och validerar alla filer innan något sparas.
+
+    En avvisad fil lämnar då inga halva uppladdningar efter sig.
+    """
+    max_bytes = profile["max_file_size_mb"] * 1024 * 1024
+    contents: list[bytes] = []
+    for number, f in enumerate(files, start=first_number):
+        # Vanlig def-endpoint: blockerande I/O körs i trådpool, inte på event-loopen.
+        data = f.file.read(max_bytes + 1)
+        if len(data) > max_bytes:
+            raise HTTPException(
+                status.HTTP_413_CONTENT_TOO_LARGE,
+                f"Kandidat #{number} är större än den tillåtna filstorleken "
+                f"på {profile['max_file_size_mb']} MB. Inga CV:n sparades.",
+            )
+        if not data.startswith(PDF_MAGIC):
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST,
+                f"Kandidat #{number} är inte en PDF-fil. Bara PDF stöds. Inga CV:n sparades.",
+            )
+        contents.append(data)
+    return contents
+
+
+def _store_candidates(
+    supabase: Client,
+    user: CurrentUser,
+    analysis_id: str,
+    contents: list[bytes],
+    first_number: int,
+) -> list[Candidate]:
+    """Laddar upp originalfilerna och skapar kandidaterna. Städar filerna om något går fel."""
     stored: list[str] = []
     try:
         rows = []
-        for number, data in enumerate(contents, start=1):
+        for number, data in enumerate(contents, start=first_number):
             # Sökvägen innehåller aldrig originalfilnamnet.
-            path = f"{user.id}/{analysis['id']}/{uuid.uuid4().hex}.pdf"
+            path = f"{user.id}/{analysis_id}/{uuid.uuid4().hex}.pdf"
             # Registrera sökvägen före uppladdningen så en halvfärdig fil också städas.
             stored.append(path)
             supabase.storage.from_(BUCKET).upload(
                 path, data, {"content-type": "application/pdf"}
             )
             rows.append(
-                {"analysis_id": analysis["id"], "number": number, "original_path": path}
+                {"analysis_id": analysis_id, "number": number, "original_path": path}
             )
-        candidates = _candidates(
-            supabase.table("candidates").insert(rows).execute().data
-        )
+        return _candidates(supabase.table("candidates").insert(rows).execute().data)
     except Exception:
-        # Städa upp så en misslyckad uppladdning inte lämnar kvar filer eller en tom analys.
         if stored:
             supabase.storage.from_(BUCKET).remove(stored)
-        supabase.table("analysis_batches").delete().eq("id", analysis["id"]).execute()
         raise
-    return _to_out(analysis, candidates)
 
 
 @router.get("", response_model=list[AnalysisSummary])
@@ -372,22 +435,31 @@ def _check_quota(
     user: CurrentUser,
     candidates: list[Candidate],
     stale_before: datetime,
+    adding: int = 0,
 ) -> None:
-    """Stoppar en körning som skulle överskrida månadskvoten, innan något körs.
+    """Stoppar en körning, eller ett tillägg, som skulle överskrida månadskvoten.
 
     Kontrollen utgår från antal uppladdade filer, eftersom utfallet inte är känt i förväg.
-    Det som faktiskt räknas mot kvoten är bara lyckade CV:n (se användningsloggen).
+    Vid tillägg räknas analysens ej körda CV:n plus de nya, så det som laddas upp också
+    går att köra. Det som faktiskt räknas mot kvoten är bara lyckade CV:n (se
+    användningsloggen).
     """
-    to_run = sum(c.is_runnable(stale_before) for c in candidates)
+    to_run = sum(c.is_runnable(stale_before) for c in candidates) + adding
     if not to_run:
         return  # inget att köra: /run svarar 409 nedan
     limit = _profile(supabase, user)["cv_quota_limit"]
     remaining = quota_remaining(supabase, user.id, limit, stale_before)
     if to_run > remaining:
+        if adding:
+            attempt = f"analysen skulle få {to_run} CV:n att köra"
+            outcome = "Inga CV:n sparades."
+        else:
+            attempt = f"du försöker köra {to_run} CV:n"
+            outcome = "Inget kördes."
         raise HTTPException(
             status.HTTP_403_FORBIDDEN,
-            f"Kvoten räcker inte: du försöker köra {to_run} CV:n men har "
-            f"{remaining} kvar av {limit} den här månaden. Inget kördes.",
+            f"Kvoten räcker inte: {attempt} men du har "
+            f"{remaining} kvar av {limit} den här månaden. {outcome}",
         )
 
 
@@ -421,10 +493,7 @@ def extend_analysis(
     supabase: Annotated[Client, Depends(get_supabase)],
 ) -> AnalysisOut:
     """Flyttar fram raderingsdatumet, högst till taket räknat från idag (rullande tak)."""
-    analysis = _own_analysis(supabase, user, analysis_id)
-    if datetime.fromisoformat(analysis["expires_at"]) <= datetime.now(UTC):
-        # Utgången analys väntar bara på raderingsjobbet och kan inte återupplivas.
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Analysen finns inte.")
+    analysis = _live_analysis(supabase, user, analysis_id)
     expires_at = _checked_expiry(body.expires_at, _profile(supabase, user))
     if expires_at <= datetime.fromisoformat(analysis["expires_at"]):
         raise HTTPException(
@@ -466,3 +535,15 @@ def _own_analysis(supabase: Client, user: CurrentUser, analysis_id: uuid.UUID) -
     if not rows:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Analysen finns inte.")
     return rows[0]
+
+
+def _live_analysis(supabase: Client, user: CurrentUser, analysis_id: uuid.UUID) -> dict:
+    """Egen analys som inte passerat raderingsdatumet.
+
+    En utgången analys väntar bara på raderingsjobbet och kan inte återupplivas eller
+    få nya CV:n.
+    """
+    analysis = _own_analysis(supabase, user, analysis_id)
+    if datetime.fromisoformat(analysis["expires_at"]) <= datetime.now(UTC):
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Analysen finns inte.")
+    return analysis
