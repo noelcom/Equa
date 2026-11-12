@@ -1,10 +1,16 @@
+from datetime import UTC, datetime
+
+
 def test_first_login_creates_profile_with_default_limits(client, make_user):
     user = make_user()
 
     res = client.get("/me", headers=user.auth)
 
     assert res.status_code == 200
-    assert res.json() == {
+    body = res.json()
+    resets_at = datetime.fromisoformat(body["quota"].pop("resets_at"))
+    assert resets_at.day == 1 and resets_at > datetime.now(UTC)
+    assert body == {
         "quota": {
             "limit": 500,
             "used": 0,

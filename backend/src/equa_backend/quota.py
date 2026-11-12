@@ -1,10 +1,11 @@
 """Kvot och användningslogg. Enda stället som räknar förbrukning (GLOSSARY: Kvot)."""
 
+from dataclasses import dataclass
 from datetime import UTC, datetime
 
 from supabase import Client
 
-from equa_backend.candidates import IN_FLIGHT
+from equa_backend.candidates import IN_FLIGHT, Candidate
 
 PAGE = 1000
 
@@ -12,6 +13,13 @@ PAGE = 1000
 def _month_start() -> str:
     now = datetime.now(UTC)
     return now.replace(day=1, hour=0, minute=0, second=0, microsecond=0).isoformat()
+
+
+def next_reset() -> datetime:
+    """När kvoten fylls på: första dagen i nästa kalendermånad (UTC)."""
+    now = datetime.now(UTC)
+    year, month = (now.year + 1, 1) if now.month == 12 else (now.year, now.month + 1)
+    return datetime(year, month, 1, tzinfo=UTC)
 
 
 def used_this_month(supabase: Client, customer_id: str) -> int:
@@ -37,7 +45,7 @@ def used_this_month(supabase: Client, customer_id: str) -> int:
         offset += PAGE
 
 
-def reserved(supabase: Client, customer_id: str, stale_before: datetime) -> int:
+def count_reserved(supabase: Client, customer_id: str, stale_before: datetime) -> int:
     """CV:n som körs just nu (ej fastnade) i kundens analyser.
 
     De är inte loggade än men kan komma att räknas mot kvoten, så de reserveras.
@@ -59,7 +67,7 @@ def reserved(supabase: Client, customer_id: str, stale_before: datetime) -> int:
     )
 
 
-def pending(supabase: Client, customer_id: str) -> int:
+def count_pending(supabase: Client, customer_id: str) -> int:
     """Uppladdade men ej körda CV:n i alla kundens analyser. Bara information, ingen kontroll."""
     return (
         supabase.table("candidates")
@@ -78,8 +86,38 @@ def remaining(
 ) -> int:
     """Återstående kvot, med pågående CV:n reserverade. Delas av /me och körningskontrollen."""
     used = used_this_month(supabase, customer_id)
-    held = reserved(supabase, customer_id, stale_before)
-    return max(limit - used - held, 0)
+    reserved = count_reserved(supabase, customer_id, stale_before)
+    return max(limit - used - reserved, 0)
+
+
+@dataclass(frozen=True)
+class QuotaSnapshot:
+    """Kvotläget i början av ett anrop. Den enda källan för kvotreglerna (ADR 0002).
+
+    Reglerna ligger här, så att frontend bara visar färdiga svar.
+    """
+
+    limit: int
+    remaining: int
+    stale_before: datetime
+
+    def runnable_count(self, candidates: list[Candidate]) -> int:
+        return sum(c.is_runnable(self.stale_before) for c in candidates)
+
+    def can_run(self, candidates: list[Candidate]) -> bool:
+        return self.runnable_count(candidates) <= self.remaining
+
+    def addable_count(self, candidates: list[Candidate]) -> int:
+        """Så många CV:n till ryms, när analysens ej körda CV:n räknas med."""
+        return max(self.remaining - self.runnable_count(candidates), 0)
+
+
+def snapshot(
+    supabase: Client, customer_id: str, limit: int, stale_before: datetime
+) -> QuotaSnapshot:
+    return QuotaSnapshot(
+        limit, remaining(supabase, customer_id, limit, stale_before), stale_before
+    )
 
 
 def write_usage_log(

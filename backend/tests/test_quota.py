@@ -33,7 +33,9 @@ def _set_quota(client, admin, user, limit):
 
 
 def _me(client, user):
-    return client.get("/me", headers=user.auth).json()
+    me = client.get("/me", headers=user.auth).json()
+    me["quota"].pop("resets_at")  # beror på dagens datum, testas i test_me
+    return me
 
 
 def _logs(admin, user):
@@ -164,14 +166,14 @@ def test_usage_from_previous_months_does_not_count(client, make_user, admin):
     assert _run(client, user, analysis).status_code == 202
 
 
-def _stick(admin, analysis, status, minutes_ago):
+def _set_progress(admin, analysis, status, minutes_ago):
     last_progress_at = datetime.now(UTC) - timedelta(minutes=minutes_ago)
     admin.table("candidates").update(
         {"status": status, "last_progress_at": last_progress_at.isoformat()}
     ).eq("analysis_id", analysis["id"]).execute()
 
 
-def test_creating_an_analysis_with_more_cvs_than_the_quota_is_refused_and_nothing_is_stored(
+def test_creating_over_the_quota_is_refused_and_nothing_is_stored(
     client, make_user, admin
 ):
     user = make_user()
@@ -206,7 +208,7 @@ def test_me_reports_reserved_and_pending_cvs_across_all_analyses(
     running = _analysis(client, user, ["POÄNG 50"] * 2)
     _analysis(client, user, ["POÄNG 50"] * 3)  # väntar på körning
     _analysis(client, user, ["POÄNG 50"])  # väntar på körning
-    _stick(admin, running, "processing", minutes_ago=1)
+    _set_progress(admin, running, "processing", minutes_ago=1)
 
     quota = _me(client, user)["quota"]
 
@@ -219,7 +221,7 @@ def test_stuck_cv_is_not_reserved_nor_pending_but_is_runnable(client, make_user,
     user = make_user()
     analysis = _analysis(client, user, ["POÄNG 50"])
     assert analysis["runnable_count"] == 1
-    _stick(admin, analysis, "processing", minutes_ago=60)
+    _set_progress(admin, analysis, "processing", minutes_ago=60)
 
     quota = _me(client, user)["quota"]
     body = client.get(f"/analyses/{analysis['id']}", headers=user.auth).json()
@@ -235,8 +237,34 @@ def test_runnable_count_covers_uploaded_cvs_and_drops_to_zero_while_running(
     user = make_user()
     analysis = _analysis(client, user, ["POÄNG 50"] * 2)
     assert analysis["runnable_count"] == 2
-    _stick(admin, analysis, "processing", minutes_ago=1)
+    _set_progress(admin, analysis, "processing", minutes_ago=1)
 
     body = client.get(f"/analyses/{analysis['id']}", headers=user.auth).json()
 
     assert body["runnable_count"] == 0
+
+
+def test_analysis_tells_whether_it_can_run_and_how_many_more_cvs_fit(
+    client, make_user, admin
+):
+    user = make_user()
+    analysis = _analysis(client, user, ["POÄNG 50"] * 3)
+    assert analysis["can_run"] is True
+    assert analysis["addable_count"] == 497
+
+    _set_quota(client, admin, user, 2)
+    body = client.get(f"/analyses/{analysis['id']}", headers=user.auth).json()
+
+    assert body["can_run"] is False
+    assert body["addable_count"] == 0
+
+
+def test_run_response_counts_the_started_cvs_as_reserved(client, make_user, admin):
+    user = make_user()
+    _set_quota(client, admin, user, 5)
+    analysis = _analysis(client, user, ["POÄNG 50"] * 2)
+
+    body = _run(client, user, analysis).json()
+
+    assert body["runnable_count"] == 0
+    assert body["addable_count"] == 3

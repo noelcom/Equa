@@ -156,7 +156,7 @@ export function Analyses({ me, onMeChanged }: { me: Me; onMeChanged: () => void 
             void refresh();
             onMeChanged();
           }}
-          remaining={me.quota.remaining}
+          quota={me.quota}
           maxFileSizeMb={me.max_file_size_mb}
           maxRetentionDays={me.max_retention_days}
           onExtend={(d) => void extend(selected.id, d)}
@@ -321,7 +321,7 @@ function AnalysisView({
   onBack,
   onRun,
   onAdded,
-  remaining,
+  quota,
   maxFileSizeMb,
   maxRetentionDays,
   onExtend,
@@ -331,7 +331,7 @@ function AnalysisView({
   onBack: () => void;
   onRun: () => void;
   onAdded: (a: Analysis) => void;
-  remaining: number;
+  quota: Me["quota"];
   maxFileSizeMb: number;
   maxRetentionDays: number;
   onExtend: (date: Date) => void;
@@ -358,12 +358,10 @@ function AnalysisView({
     return () => clearTimeout(timer);
   }, [running, progressKey]);
   const stalled = running && stalledKey === progressKey;
-  // Samma regel som backend: körningen nekas om den har fler CV:n än kvoten räcker till.
-  const runBlocked = analysis.runnable_count > remaining;
-  const runBlockedNotice = runBlocked && (
+  const runNotice = !analysis.can_run && (
     <p className="text-sm text-zinc-600">
-      Analysen har {analysis.runnable_count} CV:n att köra men du har {remaining} kvar den här
-      månaden. Kvoten fylls på den {nextMonthStart()}.
+      Analysen har {analysis.runnable_count} CV:n att köra men du har {quota.remaining} kvar den
+      här månaden. Kvoten fylls på den {formatResetDate(quota.resets_at)}.
     </p>
   );
 
@@ -405,22 +403,17 @@ function AnalysisView({
 
       <AddCvs
         analysisId={analysis.id}
-        // Analysens ej körda CV:n räknas med, så det som laddas upp också går att köra.
-        max={Math.max(remaining - analysis.runnable_count, 0)}
+        maxAddable={analysis.addable_count}
         maxFileSizeMb={maxFileSizeMb}
         onAdded={onAdded}
       />
 
       {analysis.state === "ready" && (
         <div className="flex flex-col gap-1">
-          <button
-            onClick={onRun}
-            disabled={runBlocked}
-            className="self-start rounded bg-black px-4 py-2 text-white disabled:opacity-50"
-          >
+          <RunButton onRun={onRun} disabled={!analysis.can_run}>
             Starta analys
-          </button>
-          {runBlockedNotice}
+          </RunButton>
+          {runNotice}
         </div>
       )}
       {analysis.state === "running" && (
@@ -434,14 +427,10 @@ function AnalysisView({
               <p className="text-sm text-zinc-600">
                 Det verkar ha hakat upp sig. Du kan ta om de CV:n som inte blev klara.
               </p>
-              <button
-                onClick={onRun}
-                disabled={runBlocked}
-                className="self-start rounded bg-black px-4 py-2 text-white disabled:opacity-50"
-              >
+              <RunButton onRun={onRun} disabled={!analysis.can_run}>
                 Ta om fastnade CV:n
-              </button>
-              {runBlockedNotice}
+              </RunButton>
+              {runNotice}
             </div>
           )}
         </div>
@@ -497,13 +486,13 @@ function AnalysisView({
 // och raderingsdatumet ändras inte.
 function AddCvs({
   analysisId,
-  max,
+  maxAddable,
   maxFileSizeMb,
   onAdded,
 }: {
   analysisId: string;
   // Så många CV:n till ryms i kvoten.
-  max: number;
+  maxAddable: number;
   maxFileSizeMb: number;
   onAdded: (a: Analysis) => void;
 }) {
@@ -512,7 +501,7 @@ function AddCvs({
   const [inputKey, setInputKey] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const overQuota = files.length > max;
+  const overQuota = files.length > maxAddable;
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -547,7 +536,7 @@ function AddCvs({
           onChange={(e) => setFiles(Array.from(e.target.files ?? []))}
         />
       </label>
-      {overQuota && <QuotaNotice max={max} />}
+      {overQuota && <QuotaNotice max={maxAddable} />}
       <button
         disabled={busy || files.length === 0 || overQuota}
         className="self-start rounded border border-zinc-300 px-3 py-1 disabled:opacity-50"
@@ -621,11 +610,30 @@ function QuotaNotice({ max }: { max: number }) {
   );
 }
 
-// "1 december": när kvoten fylls på. Kvoten räknas per kalendermånad i UTC.
-function nextMonthStart(): string {
-  const now = new Date();
-  const next = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1));
-  return `1 ${next.toLocaleDateString("sv-SE", { month: "long", timeZone: "UTC" })}`;
+function RunButton({
+  onRun,
+  disabled,
+  children,
+}: {
+  onRun: () => void;
+  disabled: boolean;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      onClick={onRun}
+      disabled={disabled}
+      className="self-start rounded bg-black px-4 py-2 text-white disabled:opacity-50"
+    >
+      {children}
+    </button>
+  );
+}
+
+// "1 december": datumet kommer från backend, som äger månadsgränsen (UTC).
+function formatResetDate(iso: string): string {
+  const d = new Date(iso).toLocaleDateString("sv-SE", { day: "numeric", month: "long", timeZone: "UTC" });
+  return d;
 }
 
 function formatDate(iso: string): string {

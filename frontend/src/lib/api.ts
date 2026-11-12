@@ -10,6 +10,8 @@ export type Me = {
     reserved: number;
     // Uppladdade men ej körda CV:n i alla analyser. Bara information.
     pending: number;
+    // När kvoten fylls på (ISO, första dagen i nästa månad).
+    resets_at: string;
   };
   default_retention_days: number;
   max_retention_days: number;
@@ -48,6 +50,10 @@ export type Analysis = {
   state: "ready" | "running" | "finished";
   // CV:n som nästa körning tar (uppladdade och fastnade). Samma siffra som backend kontrollerar mot kvoten.
   runnable_count: number;
+  // Backend avgör om kvoten räcker. Frontend visar bara svaret.
+  can_run: boolean;
+  // Så många CV:n till kan läggas till utan att kvoten överskrids.
+  addable_count: number;
   progress: { total: number; finished: number };
   // Bedömda kandidater efter poäng (högst först), därefter övriga i nummerordning.
   candidates: Candidate[];

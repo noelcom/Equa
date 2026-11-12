@@ -1,4 +1,5 @@
 import uuid
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from typing import Annotated, Literal
 
@@ -34,7 +35,7 @@ from equa_backend.deps import (
     get_supabase,
 )
 from equa_backend.pipeline import BUCKET, Assessment
-from equa_backend.quota import remaining as quota_remaining
+from equa_backend.quota import QuotaSnapshot, snapshot
 from equa_backend.retention import (
     default_retention_days,
     delete_analysis,
@@ -76,6 +77,10 @@ class AnalysisOut(BaseModel):
     state: Literal["ready", "running", "finished"]
     # CV:n som nästa körning tar: uppladdade, plus fastnade (se Candidate.is_runnable).
     runnable_count: int
+    # Räcker kvoten till en körning av runnable_count CV:n?
+    can_run: bool
+    # Så många CV:n till kan läggas till utan att kvoten överskrids.
+    addable_count: int
     progress: Progress
     # Leaderboard: bedömda kandidater efter poäng (högst först), därefter övriga
     # i nummerordning. Ingen kandidat filtreras bort (ADR 0003).
@@ -136,7 +141,7 @@ def _state(candidates: list[Candidate]) -> Literal["ready", "running", "finished
 
 
 def _to_out(
-    analysis: dict, candidates: list[Candidate], stale_before: datetime
+    analysis: dict, candidates: list[Candidate], quota: QuotaSnapshot
 ) -> AnalysisOut:
     return AnalysisOut(
         id=analysis["id"],
@@ -145,18 +150,15 @@ def _to_out(
         expires_at=analysis["expires_at"],
         created_at=analysis["created_at"],
         state=_state(candidates),
-        runnable_count=sum(c.is_runnable(stale_before) for c in candidates),
+        runnable_count=quota.runnable_count(candidates),
+        can_run=quota.can_run(candidates),
+        addable_count=quota.addable_count(candidates),
         progress=Progress(
             total=len(candidates),
             finished=sum(c.status in FINISHED for c in candidates),
         ),
         candidates=[_candidate_out(c) for c in sorted(candidates, key=_rank_key)],
     )
-
-
-def _stale_before(settings: Settings) -> datetime:
-    """Gränsen för när ett pågående CV räknas som fastnat."""
-    return datetime.now(UTC) - timedelta(minutes=settings.stale_cv_minutes)
 
 
 def _profile(supabase: Client, user: CurrentUser) -> dict:
@@ -167,6 +169,14 @@ def _profile(supabase: Client, user: CurrentUser) -> dict:
     return (
         supabase.table("profiles").select("*").eq("id", user.id).single().execute().data
     )
+
+
+def _quota(
+    supabase: Client, user: CurrentUser, settings: Settings, profile: dict | None = None
+) -> QuotaSnapshot:
+    profile = profile or _profile(supabase, user)
+    stale_before = datetime.now(UTC) - timedelta(minutes=settings.stale_cv_minutes)
+    return snapshot(supabase, user.id, profile["cv_quota_limit"], stale_before)
 
 
 @router.post("", status_code=status.HTTP_201_CREATED, response_model=AnalysisOut)
@@ -188,8 +198,8 @@ def create_analysis(
 
     profile = _profile(supabase, user)
     contents = _read_pdfs(files, profile, first_number=1)
-    stale_before = _stale_before(settings)
-    _check_quota(supabase, user, [], stale_before, adding=len(contents), creating=True)
+    quota = _quota(supabase, user, settings, profile)
+    _check_quota(quota, [], "create", adding=len(contents))
 
     now = datetime.now(UTC)
     if expires_at is None:
@@ -218,7 +228,7 @@ def create_analysis(
         # Städa upp så en misslyckad uppladdning inte lämnar kvar en tom analys.
         supabase.table("analysis_batches").delete().eq("id", analysis["id"]).execute()
         raise
-    return _to_out(analysis, candidates, stale_before)
+    return _to_out(analysis, candidates, quota)
 
 
 @router.post(
@@ -240,9 +250,10 @@ def add_candidates(
     analysis = _live_analysis(supabase, user, analysis_id)
     existing = _candidates(analysis["candidates"])
     first_number = max((c.number for c in existing), default=0) + 1
-    contents = _read_pdfs(files, _profile(supabase, user), first_number)
-    stale_before = _stale_before(settings)
-    _check_quota(supabase, user, existing, stale_before, adding=len(contents))
+    profile = _profile(supabase, user)
+    contents = _read_pdfs(files, profile, first_number)
+    quota = _quota(supabase, user, settings, profile)
+    _check_quota(quota, existing, "add", adding=len(contents))
     try:
         added = _store_candidates(
             supabase, user, analysis["id"], contents, first_number
@@ -255,7 +266,7 @@ def add_candidates(
             status.HTTP_409_CONFLICT,
             "CV:n lades till samtidigt från ett annat håll. Försök igen.",
         ) from None
-    return _to_out(analysis, existing + added, stale_before)
+    return _to_out(analysis, existing + added, quota)
 
 
 def _read_pdfs(
@@ -349,7 +360,9 @@ def get_analysis(
     # Filtrera på user_id: andras analyser ser ut som att de inte finns.
     analysis = _own_analysis(supabase, user, analysis_id)
     return _to_out(
-        analysis, _candidates(analysis["candidates"]), _stale_before(settings)
+        analysis,
+        _candidates(analysis["candidates"]),
+        _quota(supabase, user, settings),
     )
 
 
@@ -369,8 +382,9 @@ def run_analysis(
     """Startar pipelinen för analysens ännu ej körda CV:n. Resultatet hämtas via GET."""
     analysis = _own_analysis(supabase, user, analysis_id)
     now = datetime.now(UTC)
-    stale_before = now - timedelta(minutes=settings.stale_cv_minutes)
-    _check_quota(supabase, user, _candidates(analysis["candidates"]), stale_before)
+    quota = _quota(supabase, user, settings)
+    stale_before = quota.stale_before
+    _check_quota(quota, _candidates(analysis["candidates"]), "run")
     # Atomära anspråk i databasen, så en dubbelklick inte kör samma CV två gånger.
     # Anspråket stämplar last_progress_at, så ett samtidigt anrop inte hittar CV:t som fastnat.
     claim = {"status": "queued", "step": None, "last_progress_at": now.isoformat()}
@@ -412,7 +426,9 @@ def run_analysis(
         analysis["job_ad"],
         claimed,
     )
-    return _to_out(analysis, candidates, stale_before)
+    # De körs nu och är reserverade, så återstående kvot har minskat med dem.
+    quota = replace(quota, remaining=max(quota.remaining - len(claimed), 0))
+    return _to_out(analysis, candidates, quota)
 
 
 @router.get("/{analysis_id}/candidates/{number}/original")
@@ -448,41 +464,34 @@ def reveal_candidate(
 
 
 def _check_quota(
-    supabase: Client,
-    user: CurrentUser,
+    quota: QuotaSnapshot,
     candidates: list[Candidate],
-    stale_before: datetime,
+    mode: Literal["run", "create", "add"],
     adding: int = 0,
-    creating: bool = False,
 ) -> None:
-    """Stoppar en körning, eller ett tillägg, som skulle överskrida månadskvoten.
+    """Stoppar en körning, ett skapande eller ett tillägg som skulle överskrida månadskvoten.
 
     Kontrollen utgår från antal uppladdade filer, eftersom utfallet inte är känt i förväg.
     Vid tillägg räknas analysens ej körda CV:n plus de nya, så det som laddas upp också
     går att köra. Det som faktiskt räknas mot kvoten är bara lyckade CV:n (se
     användningsloggen).
     """
-    to_run = sum(c.is_runnable(stale_before) for c in candidates) + adding
-    if not to_run:
-        return  # inget att köra: /run svarar 409 nedan
-    limit = _profile(supabase, user)["cv_quota_limit"]
-    remaining = quota_remaining(supabase, user.id, limit, stale_before)
-    if to_run > remaining:
-        if adding:
-            attempt = (
-                f"du försöker ladda upp {to_run} CV:n"
-                if creating
-                else f"analysen skulle få {to_run} CV:n att köra"
-            )
-            outcome = "Inga CV:n sparades."
-        else:
-            attempt = f"du försöker köra {to_run} CV:n"
-            outcome = "Inget kördes."
-        raise HTTPException(
-            status.HTTP_403_FORBIDDEN,
-            f"Kvoten räcker inte: {attempt} men du har "
-            f"{remaining} kvar av {limit} den här månaden. {outcome}",
-        )
+    to_run = quota.runnable_count(candidates) + adding
+    if not to_run or to_run <= quota.remaining:
+        return  # inget att köra (/run svarar 409 nedan) eller så ryms det
+    attempt, outcome = {
+        "run": (f"du försöker köra {to_run} CV:n", "Inget kördes."),
+        "create": (f"du försöker ladda upp {to_run} CV:n", "Inga CV:n sparades."),
+        "add": (
+            f"analysen skulle få {to_run} CV:n att köra",
+            "Inga CV:n sparades.",
+        ),
+    }[mode]
+    raise HTTPException(
+        status.HTTP_403_FORBIDDEN,
+        f"Kvoten räcker inte: {attempt} men du har "
+        f"{quota.remaining} kvar av {quota.limit} den här månaden. {outcome}",
+    )
 
 
 class ExtendRequest(BaseModel):
@@ -531,7 +540,9 @@ def extend_analysis(
         .data[0]["expires_at"]
     )
     return _to_out(
-        analysis, _candidates(analysis["candidates"]), _stale_before(settings)
+        analysis,
+        _candidates(analysis["candidates"]),
+        _quota(supabase, user, settings),
     )
 
 
