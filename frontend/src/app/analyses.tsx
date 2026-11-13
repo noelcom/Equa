@@ -376,6 +376,10 @@ function AnalysisView({
       <p className="text-sm text-zinc-600">
         Raderas {formatDate(analysis.expires_at)} (längst {formatDate(latest.toISOString())})
       </p>
+      <details className="rounded border border-zinc-300 p-3 text-sm">
+        <summary className="cursor-pointer font-medium">Visa arbetsannons</summary>
+        <p className="mt-3 whitespace-pre-wrap text-zinc-700">{analysis.job_ad}</p>
+      </details>
       <div className="flex flex-wrap items-center gap-2 text-sm">
         <input
           type="date"
