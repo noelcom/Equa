@@ -94,10 +94,6 @@ function Profile({ email }: { email: string }) {
           <p className="text-sm text-zinc-600">
             Fylls på {formatResetDate(me.quota.resets_at)}
           </p>
-          <p className="text-sm text-zinc-600">
-            Raderingstid: {me.default_retention_days} dagar som standard, högst{" "}
-            {me.max_retention_days} dagar. Största fil: {me.max_file_size_mb} MB.
-          </p>
         </div>
       )}
       {me && <DataHandling me={me} />}
