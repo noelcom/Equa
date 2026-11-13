@@ -14,4 +14,4 @@ Single-context: one `GLOSSARY.md` + `docs/adr/` at the repo root. See `docs/agen
 
 ## Kommandon
 
-Starta, testa och linta: `backend/README.md`. Frontend: `npm run check` i `frontend/`.
+Starta, testa och linta: `backend/README.md`. Frontend: `npm run check` i `frontend/`. Pre-commit-hooken som stoppar commits på `main` aktiveras per klon med `git config core.hooksPath .githooks`.

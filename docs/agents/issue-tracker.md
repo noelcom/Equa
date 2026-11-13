@@ -12,7 +12,7 @@ Issues and specs for this repo live as GitHub issues. Use the `gh` CLI for all o
 - **Count open blockers**: `gh api repos/<owner>/<repo>/issues/<n> --jq .issue_dependencies_summary.blocked_by` (open blockers only; 0 means startable). `gh issue view <n> --json blockedBy` also lists closed blockers, so filter it: `--jq '[.blockedBy.nodes[] | select(.state == "OPEN")] | length'`.
 - **Comment on an issue**: `gh issue comment <number> --body "..."`
 - **Apply / remove labels**: `gh issue edit <number> --add-label "..."` / `--remove-label "..."`
-- **Close**: post the explanation with `gh issue comment <number> --body "..."`, then `gh issue close <number>`. On an already-closed issue, `gh issue close --comment` drops the comment and still exits 0.
+- **Close**: an issue resolved by code closes when its PR merges: put `Closes #<n>` in the PR body. Close by hand only issues with no code to merge (decisions, wontfix): post the explanation with `gh issue comment <number> --body "..."`, then `gh issue close <number>`. On an already-closed issue, `gh issue close --comment` drops the comment and still exits 0.
 
 Infer the repo from `git remote -v`; `gh` does this automatically when run inside a clone.
 
