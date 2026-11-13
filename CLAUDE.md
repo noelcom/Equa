@@ -14,4 +14,8 @@ Single-context: one `GLOSSARY.md` + `docs/adr/` at the repo root. See `docs/agen
 
 ## Kommandon
 
-Starta, testa och linta: `backend/README.md`. Frontend: `npm run check` i `frontend/`. Pre-commit-hooken som stoppar commits på `main` aktiveras per klon med `git config core.hooksPath .githooks`.
+Starta, testa och linta: `backend/README.md`. Frontend: `npm run check` i `frontend/`.
+
+## Vägen till main
+
+En ändring som går att backa committas på `main` och pushas direkt. En ändring som inte går att ångra går via gren och PR som användaren mergar själv: den raderar data eller filer, ändrar raderingsjobbet eller migrerar databasen. Osäker? Ta PR-vägen.
