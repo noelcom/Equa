@@ -4,7 +4,6 @@ import { useCallback, useEffect, useState } from "react";
 import type { Session } from "@supabase/supabase-js";
 import { getMe, type Me } from "@/lib/api";
 import { supabase } from "@/lib/supabase";
-import { formatResetDate } from "@/lib/dates";
 import { Analyses } from "./analyses";
 import { DataHandling } from "./data-handling";
 
@@ -90,9 +89,6 @@ function Profile({ email }: { email: string }) {
         <div className="rounded border border-zinc-300 p-4">
           <p className="font-medium">
             {me.quota.remaining} av {me.quota.limit} CV:n kvar den här månaden
-          </p>
-          <p className="text-sm text-zinc-600">
-            Fylls på {formatResetDate(me.quota.resets_at)}
           </p>
         </div>
       )}
