@@ -25,7 +25,7 @@ Piloten körde Sonnet 5.5 även för AI-tvätten. Haiku 5.5 är valet för Equa 
 Underlag: `docs/research/modellval-tvatt-och-analys.md`.
 
 ## Kvar att göra
-- Kriterierna är skrivna men det finns inget automatiskt testset som kör dem. Konsekvenstestet (±5) är inte gjort.
+- Kriterierna är skrivna. Konsekvenstestet (±5) körs av `backend/scripts/consistency.py` (#25). Tvättkriteriet och rangordningen (topp 3) saknar fortfarande testset.
 
 ## Konsekvenser
 - Equas AI-kostnad är högre än med Batch, och rimlig vid kvoten på 500 CV:n per kund och månad.
