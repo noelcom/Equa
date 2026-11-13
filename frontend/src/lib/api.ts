@@ -3,13 +3,8 @@ import { supabase } from "./supabase";
 export type Me = {
   quota: {
     limit: number;
-    used: number;
-    // Kvoten minus månadens lyckade och de reserverade CV:na. Avgör vad som får laddas upp och köras.
+    // GLOSSARY: Återstående kvot. Avgör vad som får laddas upp och köras.
     remaining: number;
-    // CV:n som körs just nu och räknas av tillfälligt.
-    reserved: number;
-    // Uppladdade men ej körda CV:n i alla analyser. Bara information.
-    pending: number;
     // När kvoten fylls på (ISO, första dagen i nästa månad).
     resets_at: string;
   };

@@ -17,6 +17,7 @@ import {
   type Me,
   type PipelineStep,
 } from "@/lib/api";
+import { formatResetDate } from "@/lib/dates";
 
 const POLL_MS = 2000;
 // Backend tar om CV:n som stått som pågående längre än så (stale_cv_minutes, 15 min).
@@ -650,12 +651,6 @@ function RunButton({
       {children}
     </button>
   );
-}
-
-// "1 december": datumet kommer från backend, som äger månadsgränsen (UTC).
-function formatResetDate(iso: string): string {
-  const d = new Date(iso).toLocaleDateString("sv-SE", { day: "numeric", month: "long", timeZone: "UTC" });
-  return d;
 }
 
 function formatDate(iso: string): string {

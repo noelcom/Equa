@@ -67,20 +67,6 @@ def count_reserved(supabase: Client, customer_id: str, stale_before: datetime) -
     )
 
 
-def count_pending(supabase: Client, customer_id: str) -> int:
-    """Uppladdade men ej körda CV:n i alla kundens analyser. Bara information, ingen kontroll."""
-    return (
-        supabase.table("candidates")
-        .select("id, analysis_batches!inner(user_id)", count="exact")
-        .eq("status", "uploaded")
-        .eq("analysis_batches.user_id", customer_id)
-        .limit(1)
-        .execute()
-        .count
-        or 0
-    )
-
-
 def remaining(
     supabase: Client, customer_id: str, limit: int, stale_before: datetime
 ) -> int:

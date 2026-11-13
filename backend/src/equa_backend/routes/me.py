@@ -7,13 +7,7 @@ from supabase import Client
 
 from equa_backend.config import Settings, get_settings
 from equa_backend.deps import CurrentUser, get_current_user, get_supabase
-from equa_backend.quota import (
-    count_pending,
-    count_reserved,
-    next_reset,
-    remaining,
-    used_this_month,
-)
+from equa_backend.quota import next_reset, remaining
 from equa_backend.retention import default_retention_days, max_retention_days
 
 router = APIRouter()
@@ -21,12 +15,8 @@ router = APIRouter()
 
 class Quota(BaseModel):
     limit: int
-    used: int
+    # Kvoten minus månadens lyckade och de reserverade CV:na (GLOSSARY: Återstående kvot).
     remaining: int
-    # CV:n som körs just nu och är avräknade från kvoten.
-    reserved: int
-    # Uppladdade men ej körda CV:n i alla analyser. Påverkar ingen kontroll.
-    pending: int
     # När kvoten fylls på (första dagen i nästa månad, UTC).
     resets_at: datetime
 
@@ -52,15 +42,11 @@ def me(
         supabase.table("profiles").select("*").eq("id", user.id).single().execute().data
     )
     limit = row["cv_quota_limit"]
-    used = used_this_month(supabase, user.id)
     stale_before = datetime.now(UTC) - timedelta(minutes=settings.stale_cv_minutes)
     return MeResponse(
         quota=Quota(
             limit=limit,
-            used=used,
             remaining=remaining(supabase, user.id, limit, stale_before),
-            reserved=count_reserved(supabase, user.id, stale_before),
-            pending=count_pending(supabase, user.id),
             resets_at=next_reset(),
         ),
         default_retention_days=default_retention_days(row),

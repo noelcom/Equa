@@ -73,13 +73,7 @@ def test_run_exactly_at_quota_is_allowed(client, make_user, admin):
     assert _run(client, user, analysis).status_code == 202
 
     me = _me(client, user)
-    assert me["quota"] == {
-        "limit": 2,
-        "used": 2,
-        "remaining": 0,
-        "reserved": 0,
-        "pending": 0,
-    }
+    assert me["quota"] == {"limit": 2, "remaining": 0}
 
 
 def test_quota_accumulates_across_analyses_in_the_month(client, make_user, admin):
@@ -103,13 +97,7 @@ def test_failed_cvs_do_not_count_against_quota(client, make_user, admin):
 
     body = client.get(f"/analyses/{analysis['id']}", headers=user.auth).json()
     assert sorted(c["status"] for c in body["candidates"]) == ["done", "failed"]
-    assert _me(client, user)["quota"] == {
-        "limit": 2,
-        "used": 1,
-        "remaining": 1,
-        "reserved": 0,
-        "pending": 0,
-    }
+    assert _me(client, user)["quota"] == {"limit": 2, "remaining": 1}
     (log,) = _logs(admin, user)
     assert log["cv_count"] == 1
 
@@ -149,7 +137,7 @@ def test_usage_log_survives_deleting_the_analysis(client, make_user, admin):
     admin.table("analysis_batches").delete().eq("id", analysis["id"]).execute()
 
     assert len(_logs(admin, user)) == 1
-    assert _me(client, user)["quota"]["used"] == 1
+    assert _me(client, user)["quota"]["remaining"] == 500 - 1
 
 
 def test_usage_from_previous_months_does_not_count(client, make_user, admin):
@@ -166,7 +154,7 @@ def test_usage_from_previous_months_does_not_count(client, make_user, admin):
     ).execute()
     analysis = _analysis(client, user, ["POÄNG 50"])
 
-    assert _me(client, user)["quota"]["used"] == 0
+    assert _me(client, user)["quota"]["remaining"] == 1
     assert _run(client, user, analysis).status_code == 202
 
 
@@ -205,23 +193,16 @@ def test_creating_an_analysis_exactly_at_the_quota_is_allowed(client, make_user,
     assert len(_analysis(client, user, ["POÄNG 50"] * 2)["candidates"]) == 2
 
 
-def test_me_reports_reserved_and_pending_cvs_across_all_analyses(
-    client, make_user, admin
-):
+def test_running_cvs_are_reserved_but_uploaded_ones_are_not(client, make_user, admin):
     user = make_user()
     running = _analysis(client, user, ["POÄNG 50"] * 2)
-    _analysis(client, user, ["POÄNG 50"] * 3)  # väntar på körning
-    _analysis(client, user, ["POÄNG 50"])  # väntar på körning
+    _analysis(client, user, ["POÄNG 50"] * 3)  # uppladdade, ej körda
     _set_progress(admin, running, "processing", minutes_ago=1)
 
-    quota = _me(client, user)["quota"]
-
-    assert quota["reserved"] == 2
-    assert quota["pending"] == 4
-    assert quota["remaining"] == 500 - 2
+    assert _me(client, user)["quota"]["remaining"] == 500 - 2
 
 
-def test_stuck_cv_is_not_reserved_nor_pending_but_is_runnable(client, make_user, admin):
+def test_stuck_cv_is_not_reserved_but_is_runnable(client, make_user, admin):
     user = make_user()
     analysis = _analysis(client, user, ["POÄNG 50"])
     assert analysis["runnable_count"] == 1
@@ -230,8 +211,7 @@ def test_stuck_cv_is_not_reserved_nor_pending_but_is_runnable(client, make_user,
     quota = _me(client, user)["quota"]
     body = client.get(f"/analyses/{analysis['id']}", headers=user.auth).json()
 
-    assert quota["reserved"] == 0
-    assert quota["pending"] == 0
+    assert quota["remaining"] == 500
     assert body["runnable_count"] == 1
 
 
@@ -291,7 +271,6 @@ def test_cv_finished_mid_run_counts_as_used_before_the_run_ends(
 
     assert _run(client, user, analysis).status_code == 202
 
+    # Det klara CV:t är loggat och det pågående reserverat. Saknades loggraden vore 499 kvar.
     (quota,) = seen
-    assert quota["used"] == 1
-    assert quota["reserved"] == 1
     assert quota["remaining"] == 500 - 2

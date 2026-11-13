@@ -60,8 +60,6 @@ Format: **Svensk term** (kodnamn) – definition. _Undvik:_ synonymer vi inte an
 
 **Reserverad** – ett CV som körs just nu och tillfälligt räknas av från kvoten tills utfallet är känt. Lyckas det räknas det som förbrukat, misslyckas det frigörs platsen. Uppladdade men ej körda CV:n är inte reserverade. _Undvik:_ låst, pågående förbrukning.
 
-**Väntande** (`pending`) – uppladdade men ej körda CV:n över alla kundens analyser. Visas i profilrutan som information och påverkar ingen kontroll, så kunden kan förbereda kommande analyser. _Undvik:_ reserverad.
-
 **Körbara CV:n** (`runnable_count`) – de CV:n i en analys som nästa körning tar: uppladdade, plus fastnade. Backend jämför dem mot återstående kvot och svarar `can_run` och `addable_count`, så gränssnittet bara visar svaret.
 
 **Användningslogg** (`usage_logs`) – permanent, anonymiserad rad per bearbetat CV: kund, tid, om det lyckades (`cv_count` 0 eller 1), tokens. Raden skrivs så fort CV:t är klart, så ett lyckat CV räknas mot kvoten redan medan resten av körningen pågår. Underlag för fakturering.

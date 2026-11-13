@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import type { Session } from "@supabase/supabase-js";
 import { getMe, type Me } from "@/lib/api";
 import { supabase } from "@/lib/supabase";
+import { formatResetDate } from "@/lib/dates";
 import { Analyses } from "./analyses";
 import { DataHandling } from "./data-handling";
 
@@ -88,14 +89,11 @@ function Profile({ email }: { email: string }) {
       {me && (
         <div className="rounded border border-zinc-300 p-4">
           <p className="font-medium">
-            {me.quota.remaining} kvar av {me.quota.limit} den här månaden ({me.quota.used}{" "}
-            använda, {me.quota.reserved} körs just nu)
+            {me.quota.remaining} av {me.quota.limit} CV:n kvar den här månaden
           </p>
-          {me.quota.pending > 0 && (
-            <p className="text-sm text-zinc-600">
-              {me.quota.pending} uppladdade CV:n väntar på körning
-            </p>
-          )}
+          <p className="text-sm text-zinc-600">
+            Fylls på {formatResetDate(me.quota.resets_at)}
+          </p>
           <p className="text-sm text-zinc-600">
             Raderingstid: {me.default_retention_days} dagar som standard, högst{" "}
             {me.max_retention_days} dagar. Största fil: {me.max_file_size_mb} MB.
