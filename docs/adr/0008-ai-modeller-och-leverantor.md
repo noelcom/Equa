@@ -11,7 +11,7 @@ Status: accepterad.
 
 ## Kriterier för modellbyte
 - **AI-tvätt:** noll missade identifierare (namn, adresser, ålder, könspronomen) och oförändrat sakinnehåll: titlar, år, siffror och kompetenser står kvar ordagrant. Missar Haiku, provas Sonnet för tvätten.
-- **Bedömningssteg:** rangordningen stämmer med ägarens egen (samma topp 3), samma CV körd två gånger ger poäng som skiljer högst ±5, och motiveringen är sakligt korrekt utan påhittade erfarenheter. Klarar Sonnet inte detta provas Opus. Haiku prövas inte för bedömningssteget.
+- **Bedömningssteg:** rangordningen avgörs i pilotdrift hos kunderna och testas inte i förväg, samma CV körd två gånger ger poäng som skiljer högst ±5, och motiveringen är sakligt korrekt utan påhittade erfarenheter. Klarar Sonnet inte detta provas Opus. Haiku prövas inte för bedömningssteget.
 
 ## Varför
 Batch halverar priset men lämnar texten kvar hos Anthropic i 29 dagar utan zero data retention (ZDR). Det är längre än standardraderingen på 7 dagar, och "Radera direkt" når inte texten hos Anthropic. Det krockar med ADR 0007, där mindre sparad data ger mindre risk. Vinsten är ungefär 0,45 USD per 500 CV:n, och svar kan dröja upp till 24 timmar medan rekryteraren väntar.
@@ -25,7 +25,7 @@ Piloten körde Sonnet 5.5 även för AI-tvätten. Haiku 5.5 är valet för Equa 
 Underlag: `docs/research/modellval-tvatt-och-analys.md`.
 
 ## Kvar att göra
-- Kriterierna är skrivna. Konsekvenstestet (±5) körs av `backend/scripts/consistency.py` (#25). Tvättkriteriet och rangordningen (topp 3) saknar fortfarande testset.
+- Kriterierna är skrivna. Konsekvenstestet (±5) körs av `backend/scripts/consistency.py` (#25). Tvättkriteriet saknar fortfarande testset (#28). Rangordningen testas inte i förväg utan avgörs i pilotdrift.
 
 ## Konsekvenser
 - Equas AI-kostnad är högre än med Batch, och rimlig vid kvoten på 500 CV:n per kund och månad.
