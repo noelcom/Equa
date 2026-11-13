@@ -51,6 +51,36 @@ def make_pdf(text: str) -> bytes:
     return bytes(out)
 
 
+class _FailingStorage:
+    """Storage där borttagning alltid misslyckas, i övrigt som den riktiga."""
+
+    def __init__(self, real):
+        self._real = real
+
+    def from_(self, bucket):
+        outer = self._real.from_(bucket)
+
+        class Bucket:
+            def __getattr__(self, name):
+                return getattr(outer, name)
+
+            def remove(self, paths):
+                raise RuntimeError("Storage nere")
+
+        return Bucket()
+
+
+class ClientWithFailingStorage:
+    """En Supabase-klient vars storage inte kan ta bort filer. Allt annat är riktigt."""
+
+    def __init__(self, real):
+        self._real = real
+        self.storage = _FailingStorage(real.storage)
+
+    def __getattr__(self, name):
+        return getattr(self._real, name)
+
+
 def cv(body: str) -> bytes:
     """Ett CV som PDF. Raden 'POÄNG n' styr vilken poäng fejken ger."""
     return make_pdf(body)
