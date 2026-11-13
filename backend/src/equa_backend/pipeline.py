@@ -50,6 +50,13 @@ eller instegsjobb ska poängen dras ner kraftigt.
 3. Värdera översättbara färdigheter och praktisk problemlösning, men respektera \
 hårda krav.
 
+Konkretion: bygg bara på det som uttryckligen står i CV:t mot annonsen, i alla \
+fält inklusive motiveringen. Gissa aldrig och dra inga slutsatser om personen, \
+till exempel om risker, motivation eller vad som kan ligga bakom luckor i CV:t. \
+Översättbara färdigheter värderas bara när CV:t konkret visar dem. Saknade krav \
+är krav som står i annonsen men som CV:t inte visar: lista dem ur annonsen, \
+skriv inte bara att något inte framgår.
+
 Anonymitet: CV-texten är anonymiserad. Försök aldrig gissa namn, kön, ålder eller \
 etnicitet, och låt det aldrig påverka bedömningen.
 
@@ -76,9 +83,17 @@ class Assessment(BaseModel):
     )
     key_skills: list[str] = Field(description="Nyckelkompetenser, en per post.")
     missing_requirements: str = Field(
-        description="Kort text om vilka krav i annonsen som saknas."
+        description=(
+            "Kort text om konkreta krav i annonsen som CV:t inte visar, ett gap mot annonsen. "
+            "Ange inga risker eller gissningar om personen."
+        )
     )
-    rationale: str = Field(description="Motivering till poängen.")
+    rationale: str = Field(
+        description=(
+            "Motivering till poängen, byggd på konkreta uppgifter i CV:t mot "
+            "annonsen. Inga gissningar eller risker om personen."
+        )
+    )
 
 
 @dataclass

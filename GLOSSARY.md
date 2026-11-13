@@ -28,7 +28,9 @@ Format: **Svensk term** (kodnamn) – definition. _Undvik:_ synonymer vi inte an
 
 **Poäng** (`score`) – 0–100. Ett beslutsstöd, aldrig ett avvisande.
 
-**Bedömning** – poäng, års erfarenhet, utbildningsmatch, konkreta resultat, nyckelkompetenser, saknade krav och motivering.
+**Bedömning** – poäng, års erfarenhet, utbildningsmatch, konkreta resultat, nyckelkompetenser, saknade krav och motivering. Kompetensbaserad: bygger bara på det som står i CV:t mot annonsen, aldrig på gissningar eller risker hos personen.
+
+**Saknade krav** (`missing_requirements`) – konkreta krav i annonsen som CV:t inte visar. Ett gap mot annonsen, inte en bedömning av personen.
 
 ## Pipeline
 
@@ -40,7 +42,7 @@ Format: **Svensk term** (kodnamn) – definition. _Undvik:_ synonymer vi inte an
 
 **Omförsök** – tillfälliga AI-fel (429, timeout, 5xx) provas om med växande väntetid innan CV:t blir `failed`.
 
-**Bedömningssteg** – Sonnet bedömer tvättad text mot annonsen, med strukturerad utdata (Pydantic).
+**Bedömningssteg** – Sonnet bedömer tvättad text mot annonsen, med strukturerad utdata (Pydantic). _Undvik:_ analys (det är rekryteringsomgången).
 
 **Kunde inte analyseras** (`failed`) – eget tillstånd för CV:n som inte kunde läsas (t.ex. inskannad bild), inte anonymiseras säkert (även när AI-tvätten ger tomt svar eller vägrar), inte tolkades eller inte kunde bedömas för att AI-tjänsten var tillfälligt otillgänglig efter flera försök. Aldrig poäng 0, och räknas inte mot kvoten.
 

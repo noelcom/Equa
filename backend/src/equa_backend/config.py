@@ -14,7 +14,8 @@ class Settings(BaseSettings):
     supabase_anon_key: str
     supabase_service_role_key: str
     anthropic_api_key: str = ""
-    # Modellval per pipelinesteg. Låses efter jämförelse mot piloten (#12).
+    # Modellval per pipelinesteg, låst efter jämförelse mot piloten (#12). Byte av modell
+    # kräver att kriterierna i ADR 0008 klaras.
     wash_model: str = "claude-haiku-5-5"
     assessment_model: str = "claude-sonnet-5-5"
     # Max antal CV:n som körs samtidigt, för att hålla sig under Anthropics hastighetsgränser.
