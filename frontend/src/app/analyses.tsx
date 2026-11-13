@@ -340,7 +340,7 @@ function AnalysisView({
 }) {
   const [newDate, setNewDate] = useState("");
   // Rullande tak: det räknas från idag, inte från skapandet (ADR 0007).
-  const latest = new Date(Date.now() + maxRetentionDays * 86400_000);
+  const [latest] = useState(() => new Date(Date.now() + maxRetentionDays * 86400_000));
   const ranked = analysis.candidates.filter((c) => c.status === "done");
   const waiting = analysis.candidates.filter(
     (c) => c.status === "uploaded" || c.status === "queued" || c.status === "processing",

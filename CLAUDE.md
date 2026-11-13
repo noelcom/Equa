@@ -11,3 +11,7 @@ Default five-label vocabulary (needs-triage, needs-info, ready-for-agent, ready-
 ### Domain docs
 
 Single-context: one `GLOSSARY.md` + `docs/adr/` at the repo root. See `docs/agents/domain.md`.
+
+## Kommandon
+
+Starta, testa och linta: `backend/README.md`. Frontend: `npm run check` i `frontend/`.
