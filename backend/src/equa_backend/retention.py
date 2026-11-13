@@ -22,7 +22,8 @@ SYSTEM_MAX_RETENTION_DAYS = 90
 PURGE_BATCH = 200
 # Antal poster per listning i lagringen.
 LIST_PAGE = 100
-# Antal analys-id per kontroll av föräldralösa mappar. 100 uuid ryms gott i en URL.
+# Antal analys-id per kontroll av föräldralösa mappar. Id:na går i URL:en, och 100 uuid
+# ryms gott under längdgränsen.
 ORPHAN_CHECK_BATCH = 100
 
 
@@ -68,7 +69,8 @@ def delete_analysis(supabase: Client, analysis_id: str) -> None:
 def remove_user_files(supabase: Client, user_id: str) -> None:
     """Tar bort alla användarens filer i lagringen. Kastar felet om något inte går att ta bort."""
     for name in _list_all(supabase, user_id):
-        _remove_folder(supabase, analysis_folder(user_id, name))
+        # Alla mappar under användaren, inte bara analysmappar.
+        _remove_folder(supabase, f"{user_id}/{name}")
 
 
 def _remove_folder(supabase: Client, folder: str) -> None:
@@ -109,7 +111,6 @@ def purge_orphaned_files(supabase: Client) -> None:
         }
         ids = list(folders)
         existing: set[str] = set()
-        # Id:na går i URL:en, så de kontrolleras i bitar för att inte slå i längdgränsen.
         for start in range(0, len(ids), ORPHAN_CHECK_BATCH):
             existing |= {
                 r["id"]
@@ -148,8 +149,7 @@ def _is_uuid(value: str) -> bool:
     return True
 
 
-def _purge_expired_analyses(supabase: Client) -> int:
-    deleted = 0
+def _purge_expired_analyses(supabase: Client) -> None:
     while True:
         expired = (
             supabase.table("analysis_batches")
@@ -167,10 +167,9 @@ def _purge_expired_analyses(supabase: Client) -> int:
             except Exception:
                 # En analys som inte går att radera ska inte hindra övriga. Nästa körning provar igen.
                 logger.exception("Kunde inte radera utgången analys %s", row["id"])
-        deleted += deleted_in_batch
         # Fortsätt bara om omgången var full och något raderades, så en trasig rad inte ger evig loop.
         if len(expired) < PURGE_BATCH or not deleted_in_batch:
-            return deleted
+            return
 
 
 async def purge_loop(supabase: Client, interval_seconds: float) -> None:
