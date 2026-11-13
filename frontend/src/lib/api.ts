@@ -126,6 +126,18 @@ export async function revealCandidate(analysisId: string, number: number): Promi
   setTimeout(() => URL.revokeObjectURL(url), 10_000);
 }
 
+// Excel med anonym alias och bedömning. Originalfilnamn finns aldrig med.
+export async function exportAnalysis(analysisId: string): Promise<void> {
+  const res = await authedFetch(`/analyses/${analysisId}/export`);
+  if (!res.ok) throw new Error(await errorMessage(res, "Kunde inte exportera analysen"));
+  const url = URL.createObjectURL(await res.blob());
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = "Equa-analys.xlsx";
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 10_000);
+}
+
 export async function createAnalysis(
   title: string,
   jobAd: string,

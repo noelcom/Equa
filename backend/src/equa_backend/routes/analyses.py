@@ -34,6 +34,7 @@ from equa_backend.deps import (
     get_current_user,
     get_supabase,
 )
+from equa_backend.export import XLSX_MEDIA_TYPE, build_workbook
 from equa_backend.pipeline import BUCKET, Assessment
 from equa_backend.quota import QuotaSnapshot, snapshot
 from equa_backend.retention import (
@@ -429,6 +430,23 @@ def run_analysis(
     # De körs nu och är reserverade, så återstående kvot har minskat med dem.
     quota = replace(quota, remaining=max(quota.remaining - len(claimed), 0))
     return _to_out(analysis, candidates, quota)
+
+
+@router.get("/{analysis_id}/export")
+def export_analysis(
+    analysis_id: uuid.UUID,
+    user: Annotated[CurrentUser, Depends(get_current_user)],
+    supabase: Annotated[Client, Depends(get_supabase)],
+) -> Response:
+    """Excel med anonym alias och bedömning. Originalfilnamn finns aldrig med."""
+    # Filtrerar på user_id: bara ägaren kan exportera, andras analyser ser ut som att de inte finns.
+    analysis = _own_analysis(supabase, user, analysis_id)
+    ranked = sorted(_candidates(analysis["candidates"]), key=_rank_key)
+    return Response(
+        content=build_workbook(ranked, _alias),
+        media_type=XLSX_MEDIA_TYPE,
+        headers={"Content-Disposition": 'attachment; filename="Equa-analys.xlsx"'},
+    )
 
 
 @router.get("/{analysis_id}/candidates/{number}/original")

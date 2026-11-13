@@ -5,6 +5,7 @@ import {
   addCandidates,
   createAnalysis,
   deleteAnalysis,
+  exportAnalysis,
   extendAnalysis,
   getAnalysis,
   listAnalyses,
@@ -438,7 +439,10 @@ function AnalysisView({
 
       {ranked.length > 0 && (
         <div className="flex flex-col gap-2">
-          <h3 className="font-medium">Leaderboard</h3>
+          <div className="flex items-baseline justify-between gap-3">
+            <h3 className="font-medium">Leaderboard</h3>
+            <ExportButton analysisId={analysis.id} />
+          </div>
           <p className="text-xs text-zinc-600">
             Poängen är ett beslutsstöd. Urvalet gör alltid du.
           </p>
@@ -589,6 +593,24 @@ function RankedCandidate({
         {error && <p className="mt-1 text-sm text-red-600">{error}</p>}
       </details>
     </li>
+  );
+}
+
+function ExportButton({ analysisId }: { analysisId: string }) {
+  const [error, setError] = useState<string | null>(null);
+  return (
+    <div className="flex flex-col items-end">
+      <button
+        onClick={() => {
+          setError(null);
+          exportAnalysis(analysisId).catch((e: Error) => setError(e.message));
+        }}
+        className="rounded border border-zinc-300 px-3 py-1 text-sm"
+      >
+        Ladda ner som Excel
+      </button>
+      {error && <p className="mt-1 text-sm text-red-600">{error}</p>}
+    </div>
   );
 }
 
