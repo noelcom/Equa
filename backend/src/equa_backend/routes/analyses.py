@@ -48,6 +48,7 @@ router = APIRouter(prefix="/analyses")
 PDF_MAGIC = b"%PDF-"
 # Postgres felkod för brott mot en unik-begränsning.
 UNIQUE_VIOLATION = "23505"
+FOREIGN_KEY_VIOLATION = "23503"
 
 
 class CandidateOut(BaseModel):
@@ -260,6 +261,11 @@ def add_candidates(
             supabase, user, analysis["id"], contents, first_number
         )
     except APIError as e:
+        if e.code == FOREIGN_KEY_VIOLATION:
+            # Analysen raderades medan filerna laddades upp (#18). Filerna är redan städade.
+            raise HTTPException(
+                status.HTTP_404_NOT_FOUND, "Analysen finns inte."
+            ) from None
         if e.code != UNIQUE_VIOLATION:
             raise
         # Ett samtidigt tillägg tog samma kandidatnummer. Filerna är redan städade.
