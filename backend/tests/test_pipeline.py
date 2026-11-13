@@ -1,6 +1,6 @@
 """Pipelinen genom HTTP-API:et: förtvätt, AI-tvätt, säkerhetskontroll och bedömning."""
 
-from helpers import cv, make_pdf
+from helpers import cv, file_exists, make_pdf, original_paths
 
 from equa_backend.config import get_settings
 
@@ -555,7 +555,7 @@ def test_delete_now_in_the_middle_of_a_run_succeeds_and_nothing_is_recreated(
     _configure(client, max_parallel_cvs=1)
     user = make_user()
     analysis = _analysis(client, user, [("a.pdf", cv("Utvecklare.\nPOÄNG 80"))])
-    paths = _original_paths(admin, analysis["id"])
+    paths = original_paths(admin, analysis["id"])
     statuses = []
 
     def delete_now(_text):
@@ -576,7 +576,7 @@ def test_purge_job_deleting_an_expired_analysis_mid_run_has_the_same_outcome(
 ):
     from datetime import UTC, datetime, timedelta
 
-    from equa_backend.retention import purge_expired
+    from equa_backend.retention import run_purge_job
 
     _configure(client, max_parallel_cvs=1)
     user = make_user()
@@ -586,9 +586,9 @@ def test_purge_job_deleting_an_expired_analysis_mid_run_has_the_same_outcome(
         admin.table("analysis_batches").update(
             {"expires_at": (datetime.now(UTC) - timedelta(minutes=1)).isoformat()}
         ).eq("id", analysis["id"]).execute()
-        purge_expired(admin)
+        run_purge_job(admin)
 
-    paths = _original_paths(admin, analysis["id"])
+    paths = original_paths(admin, analysis["id"])
     anthropic_fake.on_assess = expire_and_purge
 
     run = _run(client, user, analysis["id"])
@@ -620,7 +620,7 @@ def test_delete_now_during_the_ai_wash_succeeds_and_nothing_is_recreated(
     _configure(client, max_parallel_cvs=1)
     user = make_user()
     analysis = _analysis(client, user, [("a.pdf", cv("Utvecklare.\nPOÄNG 80"))])
-    paths = _original_paths(admin, analysis["id"])
+    paths = original_paths(admin, analysis["id"])
     statuses = []
 
     def delete_now_then_wash(text):
@@ -657,20 +657,4 @@ def _assert_analysis_gone(client, admin, user, analysis_id, paths):
         == []
     )
     assert client.get(f"/analyses/{analysis_id}", headers=user.auth).status_code == 404
-    assert paths and not any(_file_exists(admin, p) for p in paths)
-
-
-def _original_paths(admin, analysis_id):
-    return [
-        r["original_path"]
-        for r in admin.table("candidates")
-        .select("original_path")
-        .eq("analysis_id", analysis_id)
-        .execute()
-        .data
-    ]
-
-
-def _file_exists(admin, path):
-    folder, name = path.rsplit("/", 1)
-    return any(f["name"] == name for f in admin.storage.from_("originals").list(folder))
+    assert paths and not any(file_exists(admin, p) for p in paths)

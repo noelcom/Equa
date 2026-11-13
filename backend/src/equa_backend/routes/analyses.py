@@ -35,7 +35,7 @@ from equa_backend.deps import (
     get_supabase,
 )
 from equa_backend.export import XLSX_MEDIA_TYPE, build_workbook
-from equa_backend.pipeline import BUCKET, Assessment
+from equa_backend.pipeline import BUCKET, Assessment, analysis_folder
 from equa_backend.quota import QuotaSnapshot, snapshot
 from equa_backend.retention import (
     default_retention_days,
@@ -316,7 +316,7 @@ def _store_candidates(
         rows = []
         for number, data in enumerate(contents, start=first_number):
             # Sökvägen innehåller aldrig originalfilnamnet.
-            path = f"{user.id}/{analysis_id}/{uuid.uuid4().hex}.pdf"
+            path = f"{analysis_folder(user.id, analysis_id)}/{uuid.uuid4().hex}.pdf"
             # Registrera sökvägen före uppladdningen så en halvfärdig fil också städas.
             stored.append(path)
             supabase.storage.from_(BUCKET).upload(

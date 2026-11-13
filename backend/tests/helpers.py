@@ -81,6 +81,36 @@ class ClientWithFailingStorage:
         return getattr(self._real, name)
 
 
+def file_exists(admin, path: str) -> bool:
+    """Finns originalfilen i lagringen?"""
+    folder, name = path.rsplit("/", 1)
+    return any(f["name"] == name for f in admin.storage.from_("originals").list(folder))
+
+
+def original_paths(admin, analysis_id: str) -> list[str]:
+    """Sökvägarna till analysens originalfiler, enligt kandidatraderna."""
+    rows = (
+        admin.table("candidates")
+        .select("original_path")
+        .eq("analysis_id", analysis_id)
+        .execute()
+        .data
+    )
+    return [r["original_path"] for r in rows]
+
+
+def user_original_paths(admin, user_id: str) -> list[str]:
+    """Sökvägarna till originalfilerna i alla användarens analyser."""
+    rows = (
+        admin.table("analysis_batches")
+        .select("candidates(original_path)")
+        .eq("user_id", user_id)
+        .execute()
+        .data
+    )
+    return [c["original_path"] for a in rows for c in a["candidates"]]
+
+
 def cv(body: str) -> bytes:
     """Ett CV som PDF. Raden 'POÄNG n' styr vilken poäng fejken ger."""
     return make_pdf(body)

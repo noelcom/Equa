@@ -21,6 +21,13 @@ from equa_backend.pdf import UnreadablePdf, pdf_to_text
 from equa_backend.quota import write_usage_log
 
 BUCKET = "originals"
+
+
+def analysis_folder(user_id: str, analysis_id: str) -> str:
+    """Analysens mapp i `BUCKET`. Raderingsjobbet tömmer mappar i det här formatet (#18)."""
+    return f"{user_id}/{analysis_id}"
+
+
 log = logging.getLogger(__name__)
 
 WASH_INSTRUCTION = """\

@@ -12,7 +12,7 @@ from datetime import UTC, datetime
 
 from supabase import Client
 
-from equa_backend.pipeline import BUCKET
+from equa_backend.pipeline import BUCKET, analysis_folder
 
 logger = logging.getLogger(__name__)
 
@@ -22,6 +22,8 @@ SYSTEM_MAX_RETENTION_DAYS = 90
 PURGE_BATCH = 200
 # Antal poster per listning i lagringen.
 LIST_PAGE = 100
+# Antal analys-id per kontroll av föräldralösa mappar. 100 uuid ryms gott i en URL.
+ORPHAN_CHECK_BATCH = 100
 
 
 def max_retention_days(profile: dict) -> int:
@@ -42,7 +44,7 @@ def delete_analysis(supabase: Client, analysis_id: str) -> None:
     främmande nyckel och städar själv.
 
     Misslyckas filraderingen loggas felet men kastas inte: analysen är redan borta och
-    raderingsjobbet tar bort mappar som saknar analys (`purge_expired`).
+    raderingsjobbet tar bort mappar som saknar analys (`run_purge_job`).
     """
     rows = (
         supabase.table("analysis_batches")
@@ -54,7 +56,7 @@ def delete_analysis(supabase: Client, analysis_id: str) -> None:
     if not rows:
         return
     supabase.table("analysis_batches").delete().eq("id", analysis_id).execute()
-    folder = f"{rows[0]['user_id']}/{analysis_id}"
+    folder = analysis_folder(rows[0]["user_id"], analysis_id)
     try:
         _remove_folder(supabase, folder)
     except Exception:
@@ -66,7 +68,7 @@ def delete_analysis(supabase: Client, analysis_id: str) -> None:
 def remove_user_files(supabase: Client, user_id: str) -> None:
     """Tar bort alla användarens filer i lagringen. Kastar felet om något inte går att ta bort."""
     for name in _list_all(supabase, user_id):
-        _remove_folder(supabase, f"{user_id}/{name}")
+        _remove_folder(supabase, analysis_folder(user_id, name))
 
 
 def _remove_folder(supabase: Client, folder: str) -> None:
@@ -86,14 +88,10 @@ def _remove_folder(supabase: Client, folder: str) -> None:
         previous = names
 
 
-def purge_expired(supabase: Client) -> int:
-    """Raderar analyser vars raderingsdatum har passerat. Returnerar antalet raderade.
-
-    Tar också bort filer i mappar vars analys inte finns (`purge_orphaned_files`).
-    """
-    deleted = _purge_expired_analyses(supabase)
+def run_purge_job(supabase: Client) -> None:
+    """En körning av raderingsjobbet: utgångna analyser, sedan föräldralösa mappar."""
+    _purge_expired_analyses(supabase)
     purge_orphaned_files(supabase)
-    return deleted
 
 
 def purge_orphaned_files(supabase: Client) -> None:
@@ -105,20 +103,22 @@ def purge_orphaned_files(supabase: Client) -> None:
     """
     for user_folder in _list_all(supabase, ""):
         folders = {
-            name: f"{user_folder}/{name}"
+            name: analysis_folder(user_folder, name)
             for name in _list_all(supabase, user_folder)
             if _is_uuid(name)
         }
-        if not folders:
-            continue
-        existing = {
-            r["id"]
-            for r in supabase.table("analysis_batches")
-            .select("id")
-            .in_("id", list(folders))
-            .execute()
-            .data
-        }
+        ids = list(folders)
+        existing: set[str] = set()
+        # Id:na går i URL:en, så de kontrolleras i bitar för att inte slå i längdgränsen.
+        for start in range(0, len(ids), ORPHAN_CHECK_BATCH):
+            existing |= {
+                r["id"]
+                for r in supabase.table("analysis_batches")
+                .select("id")
+                .in_("id", ids[start : start + ORPHAN_CHECK_BATCH])
+                .execute()
+                .data
+            }
         for analysis_id, folder in folders.items():
             if analysis_id in existing:
                 continue
@@ -177,7 +177,7 @@ async def purge_loop(supabase: Client, interval_seconds: float) -> None:
     """Kör raderingsjobbet om och om igen. Det kan inte stängas av (ADR 0007)."""
     while True:
         try:
-            await asyncio.to_thread(purge_expired, supabase)
+            await asyncio.to_thread(run_purge_job, supabase)
         except Exception:
             logger.exception("Raderingsjobbet misslyckades")
         await asyncio.sleep(interval_seconds)
