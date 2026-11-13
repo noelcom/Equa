@@ -1,0 +1,8 @@
+#!/bin/sh
+# Arbete committas på en gren och når main via en PR.
+branch=$(git symbolic-ref --short HEAD 2>/dev/null)
+if [ "$branch" = "main" ]; then
+  echo "Commits görs på en gren, inte på main." >&2
+  echo "Skapa en: git switch -c <gren> origin/main" >&2
+  exit 1
+fi
