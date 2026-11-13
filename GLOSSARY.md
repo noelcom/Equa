@@ -18,7 +18,7 @@ Format: **Svensk term** (kodnamn) – definition. _Undvik:_ synonymer vi inte an
 
 **Analys** (`analysis_batch`) – en rekryteringsomgång: en arbetsannons plus de CV:n som laddats upp mot den. CV:n kan läggas till i efterhand. _Undvik:_ batch i användargränssnittet, körning.
 
-**Arbetsannons** (`job_ad`) – texten rekryteraren klistrar in. Allt bedöms mot den.
+**Arbetsannons** (`job_ad`) – texten rekryteraren klistrar in. Allt bedöms mot den. Kan ändras när ingen körning pågår. Då körs alla analysens CV:n om mot den nya texten direkt, och de gamla bedömningarna försvinner, så ingen bedömning finns mot en annons som inte längre gäller. Ändringen görs bara om kvoten räcker till alla. Bara den senaste annonsen sparas.
 
 **Anonym alias** (`anonymous_alias`) – "Kandidat #N". Det enda namn som syns i gränssnitt och export.
 

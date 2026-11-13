@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import {
   addCandidates,
+  changeJobAd,
   createAnalysis,
   deleteAnalysis,
   exportAnalysis,
@@ -134,6 +135,20 @@ export function Analyses({ me, onMeChanged }: { me: Me; onMeChanged: () => void 
     }
   }
 
+  // Lyckas ändringen startar omkörningen direkt. Svarar om det gick, så formuläret vet om det ska stängas.
+  async function changeAd(id: string, jobAd: string): Promise<boolean> {
+    setError(null);
+    try {
+      setSelected(await changeJobAd(id, jobAd));
+      return true;
+    } catch (e) {
+      setError((e as Error).message);
+      return false;
+    } finally {
+      onMeChanged();
+    }
+  }
+
   async function startRun(id: string) {
     setError(null);
     try {
@@ -163,6 +178,7 @@ export function Analyses({ me, onMeChanged }: { me: Me; onMeChanged: () => void 
           maxRetentionDays={me.max_retention_days}
           onExtend={(d) => void extend(selected.id, d)}
           onDelete={() => void remove(selected.id)}
+          onChangeAd={(jobAd) => changeAd(selected.id, jobAd)}
         />
       ) : (
         <>
@@ -318,6 +334,88 @@ function AnalysisList({
   );
 }
 
+// Annonsen, hopfälld. Att ändra den kör om alla CV:n direkt (GLOSSARY: Arbetsannons), så
+// ingen bedömning ligger kvar mot en annons som inte gäller längre.
+function JobAd({
+  analysis,
+  remaining,
+  onSave,
+}: {
+  analysis: Analysis;
+  remaining: number;
+  onSave: (jobAd: string) => Promise<boolean>;
+}) {
+  const [draft, setDraft] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+  const running = analysis.state === "running";
+  const count = analysis.progress.total;
+  const changed = draft !== null && draft.trim() !== "" && draft.trim() !== analysis.job_ad;
+
+  async function save() {
+    if (draft === null) return;
+    const ok = confirm(
+      `Alla ${count} CV:n körs om mot den nya annonsen och drar upp till ${count} från kvoten. ` +
+        "De nuvarande bedömningarna försvinner.",
+    );
+    if (!ok) return;
+    setSaving(true);
+    if (await onSave(draft.trim())) setDraft(null);
+    setSaving(false);
+  }
+
+  return (
+    <details className="rounded border border-zinc-300 p-3 text-sm">
+      <summary className="cursor-pointer font-medium">Visa arbetsannons</summary>
+      {draft === null ? (
+        <div className="mt-3 flex flex-col gap-2">
+          <p className="whitespace-pre-wrap text-zinc-700">{analysis.job_ad}</p>
+          <button
+            disabled={running}
+            onClick={() => setDraft(analysis.job_ad)}
+            className="self-start rounded border border-zinc-300 px-3 py-1 disabled:opacity-50"
+          >
+            Ändra annons
+          </button>
+          {running && (
+            <p className="text-zinc-600">Annonsen kan ändras när körningen är klar.</p>
+          )}
+        </div>
+      ) : (
+        <div className="mt-3 flex flex-col gap-2">
+          <textarea
+            rows={10}
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            className="rounded border border-zinc-300 p-2"
+          />
+          {!analysis.can_rerun_all && (
+            <p className="text-zinc-600">
+              Att ändra annonsen kör om alla {count} CV:n, men du har {remaining} kvar den här
+              månaden.
+            </p>
+          )}
+          <div className="flex gap-2">
+            <button
+              disabled={!changed || !analysis.can_rerun_all || running || saving}
+              onClick={() => void save()}
+              className="rounded bg-black px-3 py-1 text-white disabled:opacity-50"
+            >
+              Spara och kör om
+            </button>
+            <button
+              disabled={saving}
+              onClick={() => setDraft(null)}
+              className="rounded border border-zinc-300 px-3 py-1"
+            >
+              Avbryt
+            </button>
+          </div>
+        </div>
+      )}
+    </details>
+  );
+}
+
 function AnalysisView({
   analysis,
   onBack,
@@ -328,6 +426,7 @@ function AnalysisView({
   maxRetentionDays,
   onExtend,
   onDelete,
+  onChangeAd,
 }: {
   analysis: Analysis;
   onBack: () => void;
@@ -338,6 +437,7 @@ function AnalysisView({
   maxRetentionDays: number;
   onExtend: (date: Date) => void;
   onDelete: () => void;
+  onChangeAd: (jobAd: string) => Promise<boolean>;
 }) {
   const [newDate, setNewDate] = useState("");
   // Rullande tak: det räknas från idag, inte från skapandet (ADR 0007).
@@ -376,10 +476,7 @@ function AnalysisView({
       <p className="text-sm text-zinc-600">
         Raderas {formatDate(analysis.expires_at)} (längst {formatDate(latest.toISOString())})
       </p>
-      <details className="rounded border border-zinc-300 p-3 text-sm">
-        <summary className="cursor-pointer font-medium">Visa arbetsannons</summary>
-        <p className="mt-3 whitespace-pre-wrap text-zinc-700">{analysis.job_ad}</p>
-      </details>
+      <JobAd analysis={analysis} remaining={quota.remaining} onSave={onChangeAd} />
       <div className="flex flex-wrap items-center gap-2 text-sm">
         <input
           type="date"

@@ -83,6 +83,8 @@ class AnalysisOut(BaseModel):
     can_run: bool
     # Så många CV:n till kan läggas till utan att kvoten överskrids.
     addable_count: int
+    # Räcker kvoten till att köra om alla CV:n? Krävs för att ändra annonsen.
+    can_rerun_all: bool
     progress: Progress
     # Leaderboard: bedömda kandidater efter poäng (högst först), därefter övriga
     # i nummerordning. Ingen kandidat filtreras bort (ADR 0003).
@@ -155,6 +157,7 @@ def _to_out(
         runnable_count=quota.runnable_count(candidates),
         can_run=quota.can_run(candidates),
         addable_count=quota.addable_count(candidates),
+        can_rerun_all=quota.can_rerun_all(candidates),
         progress=Progress(
             total=len(candidates),
             finished=sum(c.status in FINISHED for c in candidates),
@@ -438,6 +441,105 @@ def run_analysis(
     return _to_out(analysis, candidates, quota)
 
 
+class JobAdRequest(BaseModel):
+    job_ad: str
+
+
+# Tömmer bedömningen, så ingen gammal poäng står kvar mot en annons som inte gäller längre.
+CLEARED_ASSESSMENT = {
+    "score": None,
+    "years_experience": None,
+    "education_match": None,
+    "concrete_results": None,
+    "key_skills": None,
+    "missing_requirements": None,
+    "rationale": None,
+    "failure_reason": None,
+}
+
+
+@router.put(
+    "/{analysis_id}/job_ad",
+    status_code=status.HTTP_202_ACCEPTED,
+    response_model=AnalysisOut,
+)
+def change_job_ad(
+    analysis_id: uuid.UUID,
+    body: JobAdRequest,
+    background: BackgroundTasks,
+    user: Annotated[CurrentUser, Depends(get_current_user)],
+    supabase: Annotated[Client, Depends(get_supabase)],
+    anthropic_client: Annotated[anthropic.Anthropic, Depends(get_anthropic_client)],
+    settings: Annotated[Settings, Depends(get_settings)],
+) -> AnalysisOut:
+    """Byter arbetsannonsen och kör om alla analysens CV:n mot den nya texten direkt.
+
+    De gamla bedömningarna töms, så ingen bedömning står kvar mot en annons som inte
+    längre gäller (GLOSSARY: Arbetsannons).
+    """
+    analysis = _live_analysis(supabase, user, analysis_id)
+    job_ad = body.job_ad.strip()
+    if not job_ad:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_CONTENT, "Arbetsannonsen får inte vara tom."
+        )
+    if job_ad == analysis["job_ad"]:
+        # En omkörning som inte ändrar något ska inte kosta kvot.
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
+            "Annonsen är samma som förut. Inget kördes om.",
+        )
+    candidates = _candidates(analysis["candidates"])
+    if _state(candidates) == "running":
+        # Annars bedöms en del CV:n mot den gamla texten mitt i bytet.
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "Annonsen kan inte ändras medan analysen körs. Vänta tills den är klar.",
+        )
+    quota = _quota(supabase, user, settings)
+    _check_quota(quota, candidates, "change_ad")
+    updated = (
+        supabase.table("analysis_batches")
+        .update({"job_ad": job_ad})
+        .eq("id", str(analysis_id))
+        .execute()
+        .data
+    )
+    if not updated:  # raderad under anropet
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Analysen finns inte.")
+    analysis["job_ad"] = job_ad
+    # Atomärt anspråk som i /run: ett CV som redan körs tas inte en gång till.
+    claimed = _candidates(
+        supabase.table("candidates")
+        .update(
+            {
+                "status": "queued",
+                "step": None,
+                "last_progress_at": datetime.now(UTC).isoformat(),
+                **CLEARED_ASSESSMENT,
+            }
+        )
+        .eq("analysis_id", str(analysis_id))
+        .not_.in_("status", list(IN_FLIGHT))
+        .execute()
+        .data
+    )
+    claimed_ids = {c.id for c in claimed}
+    candidates = claimed + [c for c in candidates if c.id not in claimed_ids]
+    background.add_task(
+        pipeline.run_analysis,
+        supabase,
+        anthropic_client,
+        settings,
+        user.id,
+        job_ad,
+        claimed,
+    )
+    # De körs nu och är reserverade, så återstående kvot har minskat med dem.
+    quota = replace(quota, remaining=max(quota.remaining - len(claimed), 0))
+    return _to_out(analysis, candidates, quota)
+
+
 @router.get("/{analysis_id}/export")
 def export_analysis(
     analysis_id: uuid.UUID,
@@ -497,17 +599,21 @@ def reveal_candidate(
 def _check_quota(
     quota: QuotaSnapshot,
     candidates: list[Candidate],
-    mode: Literal["run", "create", "add"],
+    mode: Literal["run", "create", "add", "change_ad"],
     adding: int = 0,
 ) -> None:
-    """Stoppar en körning, ett skapande eller ett tillägg som skulle överskrida månadskvoten.
+    """Stoppar en körning, ett skapande, ett tillägg eller en annonsändring som skulle
+    överskrida månadskvoten.
 
     Kontrollen utgår från antal uppladdade filer, eftersom utfallet inte är känt i förväg.
     Vid tillägg räknas analysens ej körda CV:n plus de nya, så det som laddas upp också
-    går att köra. Det som faktiskt räknas mot kvoten är bara lyckade CV:n (se
-    användningsloggen).
+    går att köra. En annonsändring kör om alla CV:n, så alla räknas. Det som faktiskt
+    räknas mot kvoten är bara lyckade CV:n (se användningsloggen).
     """
-    to_run = quota.runnable_count(candidates) + adding
+    if mode == "change_ad":
+        to_run = len(candidates)
+    else:
+        to_run = quota.runnable_count(candidates) + adding
     if not to_run or to_run <= quota.remaining:
         return  # inget att köra (/run svarar 409 nedan) eller så ryms det
     attempt, outcome = {
@@ -516,6 +622,10 @@ def _check_quota(
         "add": (
             f"analysen skulle få {to_run} CV:n att köra",
             "Inga CV:n sparades.",
+        ),
+        "change_ad": (
+            f"en ny annons kör om alla {to_run} CV:n",
+            "Annonsen ändrades inte.",
         ),
     }[mode]
     raise HTTPException(

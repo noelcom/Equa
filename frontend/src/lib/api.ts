@@ -49,6 +49,8 @@ export type Analysis = {
   can_run: boolean;
   // Så många CV:n till kan läggas till utan att kvoten överskrids.
   addable_count: number;
+  // Räcker kvoten till att köra om alla CV:n? Krävs för att ändra annonsen.
+  can_rerun_all: boolean;
   progress: { total: number; finished: number };
   // Bedömda kandidater efter poäng (högst först), därefter övriga i nummerordning.
   candidates: Candidate[];
@@ -166,6 +168,17 @@ export async function extendAnalysis(id: string, expiresAt: Date): Promise<Analy
     body: JSON.stringify({ expires_at: expiresAt.toISOString() }),
   });
   if (!res.ok) throw new Error(await errorMessage(res, "Kunde inte flytta raderingsdatumet"));
+  return res.json();
+}
+
+// Byter annonsen och kör om alla CV:n mot den direkt. De gamla bedömningarna töms.
+export async function changeJobAd(id: string, jobAd: string): Promise<Analysis> {
+  const res = await authedFetch(`/analyses/${id}/job_ad`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ job_ad: jobAd }),
+  });
+  if (!res.ok) throw new Error(await errorMessage(res, "Kunde inte ändra annonsen"));
   return res.json();
 }
 
