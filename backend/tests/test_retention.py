@@ -4,6 +4,7 @@ from datetime import UTC, datetime, timedelta
 
 from helpers import ClientWithFailingStorage, make_pdf
 
+from equa_backend.deps import get_supabase
 from equa_backend.retention import delete_analysis, purge_expired
 
 
@@ -176,9 +177,12 @@ def test_delete_now_also_removes_files_without_a_candidate_row(
     assert not _file_exists(admin, stray)
 
 
-def test_analysis_is_gone_even_if_the_files_cannot_be_removed(client, make_user, admin):
+def test_analysis_is_gone_even_if_the_files_cannot_be_removed_and_the_job_takes_them(
+    client, make_user, admin
+):
     user = make_user()
     analysis = _create(client, user).json()
+    paths = _paths(admin, analysis["id"])
 
     # Kastar inte: analysen är borta och raderingsjobbet tar filerna senare.
     delete_analysis(ClientWithFailingStorage(admin), analysis["id"])
@@ -186,6 +190,64 @@ def test_analysis_is_gone_even_if_the_files_cannot_be_removed(client, make_user,
     assert (
         client.get(f"/analyses/{analysis['id']}", headers=user.auth).status_code == 404
     )
+    assert all(_file_exists(admin, p) for p in paths)
+
+    purge_expired(admin)
+
+    assert not any(_file_exists(admin, p) for p in paths)
+
+
+class _ClientThatDeletesTheAnalysisOnUpload:
+    """Riktig klient, men analysen raderas direkt efter första filuppladdningen.
+
+    Efterliknar en radering som hinner emellan uppladdningen och kandidatraden (#18).
+    """
+
+    def __init__(self, real, analysis_id):
+        outer = self
+
+        class Storage:
+            def from_(self, bucket):
+                real_bucket = real.storage.from_(bucket)
+
+                class Bucket:
+                    def __getattr__(self, name):
+                        return getattr(real_bucket, name)
+
+                    def upload(self, *args, **kwargs):
+                        result = real_bucket.upload(*args, **kwargs)
+                        if not outer.deleted:
+                            outer.deleted = True
+                            delete_analysis(real, analysis_id)
+                        return result
+
+                return Bucket()
+
+        self._real = real
+        self.deleted = False
+        self.storage = Storage()
+
+    def __getattr__(self, name):
+        return getattr(self._real, name)
+
+
+def test_upload_that_loses_the_race_against_deletion_gets_404_and_leaves_no_file(
+    client, make_user, admin
+):
+    user = make_user()
+    analysis = _create(client, user).json()
+    racing = _ClientThatDeletesTheAnalysisOnUpload(admin, analysis["id"])
+    client.app.dependency_overrides[get_supabase] = lambda: racing
+
+    res = client.post(
+        f"/analyses/{analysis['id']}/candidates",
+        headers=user.auth,
+        files=[("files", ("sen.pdf", make_pdf("Sen uppladdning"), "application/pdf"))],
+    )
+
+    assert racing.deleted
+    assert res.status_code == 404
+    assert admin.storage.from_("originals").list(f"{user.id}/{analysis['id']}") == []
 
 
 def test_purge_job_deletes_expired_analyses_and_files_but_keeps_the_rest(
