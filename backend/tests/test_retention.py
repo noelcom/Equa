@@ -2,9 +2,9 @@
 
 from datetime import UTC, datetime, timedelta
 
-from helpers import make_pdf
+from helpers import ClientWithFailingStorage, make_pdf
 
-from equa_backend.retention import purge_expired
+from equa_backend.retention import delete_analysis, purge_expired
 
 
 def _create(client, user, expires_at=None, files=None):
@@ -159,6 +159,35 @@ def test_delete_now_removes_analysis_candidates_and_original_files(
     assert not any(_file_exists(admin, p) for p in paths)
 
 
+def test_delete_now_also_removes_files_without_a_candidate_row(
+    client, make_user, admin
+):
+    # Läget när en uppladdning hunnit lägga en fil i mappen men inte skapat sin rad (#18).
+    user = make_user()
+    analysis = _create(client, user).json()
+    stray = f"{user.id}/{analysis['id']}/pagaende-uppladdning.pdf"
+    admin.storage.from_("originals").upload(
+        stray, make_pdf("Mitt i uppladdningen"), {"content-type": "application/pdf"}
+    )
+
+    res = client.delete(f"/analyses/{analysis['id']}", headers=user.auth)
+
+    assert res.status_code == 204
+    assert not _file_exists(admin, stray)
+
+
+def test_analysis_is_gone_even_if_the_files_cannot_be_removed(client, make_user, admin):
+    user = make_user()
+    analysis = _create(client, user).json()
+
+    # Kastar inte: analysen är borta och raderingsjobbet tar filerna senare.
+    delete_analysis(ClientWithFailingStorage(admin), analysis["id"])
+
+    assert (
+        client.get(f"/analyses/{analysis['id']}", headers=user.auth).status_code == 404
+    )
+
+
 def test_purge_job_deletes_expired_analyses_and_files_but_keeps_the_rest(
     client, make_user, admin
 ):
@@ -186,6 +215,25 @@ def test_purge_job_deletes_expired_analyses_and_files_but_keeps_the_rest(
     )
     assert not any(_file_exists(admin, p) for p in expired_paths)
     assert client.get(f"/analyses/{kept['id']}", headers=user.auth).status_code == 200
+    assert all(_file_exists(admin, p) for p in kept_paths)
+
+
+def test_purge_job_removes_folders_whose_analysis_is_gone_but_keeps_the_rest(
+    client, make_user, admin
+):
+    user = make_user()
+    orphaned = _create(client, user).json()
+    kept = _create(client, user).json()
+    orphaned_paths, kept_paths = (
+        _paths(admin, orphaned["id"]),
+        _paths(admin, kept["id"]),
+    )
+    # Läget efter en radering där filerna inte gick att ta bort.
+    admin.table("analysis_batches").delete().eq("id", orphaned["id"]).execute()
+
+    purge_expired(admin)
+
+    assert not any(_file_exists(admin, p) for p in orphaned_paths)
     assert all(_file_exists(admin, p) for p in kept_paths)
 
 

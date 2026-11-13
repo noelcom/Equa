@@ -11,7 +11,7 @@ import sys
 from supabase import Client
 
 from equa_backend.deps import get_supabase
-from equa_backend.retention import delete_analysis
+from equa_backend.retention import delete_analysis, remove_user_files
 
 logger = logging.getLogger(__name__)
 
@@ -19,9 +19,9 @@ logger = logging.getLogger(__name__)
 def delete_account(supabase: Client, user_id: str) -> int:
     """Raderar kontots analyser, kandidater, originalfiler, profil och auth-användare.
 
-    Analyserna raderas en i taget med `delete_analysis` (filer före rader). Misslyckas någon
-    kastas felet direkt och auth-användaren lämnas kvar, så ingen fil blir föräldralös och en
-    ny körning fortsätter där den slutade. Profilen följer med auth-användaren via cascade.
+    Analyserna raderas en i taget med `delete_analysis`, och sedan töms hela användarens
+    mapp i lagringen. Misslyckas det kastas felet och auth-användaren lämnas kvar, så en ny
+    körning tar resten. Profilen följer med auth-användaren via cascade.
     Returnerar antalet raderade analyser.
     """
     analyses = (
@@ -33,6 +33,7 @@ def delete_account(supabase: Client, user_id: str) -> int:
     )
     for row in analyses:
         delete_analysis(supabase, row["id"])
+    remove_user_files(supabase, user_id)
     supabase.auth.admin.delete_user(user_id)
     return len(analyses)
 

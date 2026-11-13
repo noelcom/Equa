@@ -1,7 +1,7 @@
 """Kontoradering (#14): analyser, filer, profil och auth-användare försvinner, loggen finns kvar."""
 
 import pytest
-from helpers import make_pdf
+from helpers import ClientWithFailingStorage, make_pdf
 
 from equa_backend.accounts import delete_account
 
@@ -38,34 +38,6 @@ def _file_exists(admin, path: str) -> bool:
 
 def _user_exists(admin, user_id: str) -> bool:
     return any(u.id == user_id for u in admin.auth.admin.list_users(per_page=1000))
-
-
-class _FailingStorage:
-    """Storage där borttagning alltid misslyckas, i övrigt som den riktiga."""
-
-    def __init__(self, real):
-        self._real = real
-
-    def from_(self, bucket):
-        outer = self._real.from_(bucket)
-
-        class Bucket:
-            def __getattr__(self, name):
-                return getattr(outer, name)
-
-            def remove(self, paths):
-                raise RuntimeError("Storage nere")
-
-        return Bucket()
-
-
-class _ClientWithFailingStorage:
-    def __init__(self, real):
-        self._real = real
-        self.storage = _FailingStorage(real.storage)
-
-    def __getattr__(self, name):
-        return getattr(self._real, name)
 
 
 def test_account_deletion_removes_everything_but_keeps_the_usage_log(
@@ -107,7 +79,7 @@ def test_account_deletion_removes_everything_but_keeps_the_usage_log(
     )
 
 
-def test_failed_file_deletion_stops_and_leaves_the_account_and_no_orphaned_files(
+def test_failed_file_deletion_stops_and_leaves_the_account_so_a_rerun_removes_the_files(
     client, make_user, admin
 ):
     user = make_user()
@@ -117,11 +89,10 @@ def test_failed_file_deletion_stops_and_leaves_the_account_and_no_orphaned_files
     assert admin.table("profiles").select("id").eq("id", user.id).execute().data
 
     with pytest.raises(RuntimeError):
-        delete_account(_ClientWithFailingStorage(admin), user.id)
+        delete_account(ClientWithFailingStorage(admin), user.id)
 
+    # Kontot finns kvar så att skriptet kan köras om. Filerna finns kvar i användarens mapp.
     assert _user_exists(admin, user.id)
-    # Raderna finns kvar och pekar på filerna, så en ny körning hittar dem.
-    assert sorted(_paths(admin, user.id)) == sorted(paths)
     assert all(_file_exists(admin, p) for p in paths)
 
     # Ny körning efter felet raderar resten.

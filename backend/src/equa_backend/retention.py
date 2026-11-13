@@ -1,12 +1,13 @@
 """Radering av analyser, kandidater och originalfiler (ADR 0007).
 
 Databasens `on delete cascade` tar bort kandidatraderna men inte storage-objekten,
-så filerna tas bort uttryckligen och före raderna (sökvägarna finns bara i raderna).
+så filerna tas bort uttryckligen: efter raden, genom att tömma analysens mapp (#18).
 Användningsloggen (`usage_logs`) rörs aldrig här: den ska överleva raderingen.
 """
 
 import asyncio
 import logging
+import uuid
 from datetime import UTC, datetime
 
 from supabase import Client
@@ -19,6 +20,8 @@ logger = logging.getLogger(__name__)
 SYSTEM_MAX_RETENTION_DAYS = 90
 # Antal analyser som hämtas per omgång i jobbet.
 PURGE_BATCH = 200
+# Antal poster per listning i lagringen.
+LIST_PAGE = 100
 
 
 def max_retention_days(profile: dict) -> int:
@@ -34,24 +37,118 @@ def default_retention_days(profile: dict) -> int:
 def delete_analysis(supabase: Client, analysis_id: str) -> None:
     """Raderar en analys med kandidater och originalfiler.
 
-    Misslyckas filraderingen kastas felet och raderna behålls, så ett nytt försök
-    fortfarande hittar sökvägarna i stället för att lämna föräldralösa filer.
+    Raden raderas först och sedan allt i analysens mapp (#18). En uppladdning som hann
+    lägga en fil i mappen fångas då av mappstädningen, och en som kommer efter faller på
+    främmande nyckel och städar själv.
+
+    Misslyckas filraderingen loggas felet men kastas inte: analysen är redan borta och
+    raderingsjobbet tar bort mappar som saknar analys (`purge_expired`).
     """
     rows = (
-        supabase.table("candidates")
-        .select("original_path")
-        .eq("analysis_id", analysis_id)
+        supabase.table("analysis_batches")
+        .select("user_id")
+        .eq("id", analysis_id)
         .execute()
         .data
     )
-    paths = [r["original_path"] for r in rows]
-    if paths:
-        supabase.storage.from_(BUCKET).remove(paths)
+    if not rows:
+        return
     supabase.table("analysis_batches").delete().eq("id", analysis_id).execute()
+    folder = f"{rows[0]['user_id']}/{analysis_id}"
+    try:
+        _remove_folder(supabase, folder)
+    except Exception:
+        logger.exception(
+            "Kunde inte ta bort %s, raderingsjobbet tar det senare", folder
+        )
+
+
+def remove_user_files(supabase: Client, user_id: str) -> None:
+    """Tar bort alla användarens filer i lagringen. Kastar felet om något inte går att ta bort."""
+    for name in _list_all(supabase, user_id):
+        _remove_folder(supabase, f"{user_id}/{name}")
+
+
+def _remove_folder(supabase: Client, folder: str) -> None:
+    """Tar bort alla filer direkt i en mapp i lagringen."""
+    bucket = supabase.storage.from_(BUCKET)
+    previous: list[str] = []
+    while True:
+        # Listningen ger högst `limit` poster per anrop. Det som tas bort försvinner ur
+        # listningen, så nästa anrop börjar alltid från början.
+        names = [f["name"] for f in bucket.list(folder, {"limit": LIST_PAGE})]
+        if not names:
+            return
+        if names == previous:
+            # Borttagningen gick igenom utan att ta bort något. Stoppa i stället för att snurra.
+            raise RuntimeError(f"Kunde inte tömma {folder} i lagringen")
+        bucket.remove([f"{folder}/{n}" for n in names])
+        previous = names
 
 
 def purge_expired(supabase: Client) -> int:
-    """Raderar analyser vars raderingsdatum har passerat. Returnerar antalet raderade."""
+    """Raderar analyser vars raderingsdatum har passerat. Returnerar antalet raderade.
+
+    Tar också bort filer i mappar vars analys inte finns (`purge_orphaned_files`).
+    """
+    deleted = _purge_expired_analyses(supabase)
+    purge_orphaned_files(supabase)
+    return deleted
+
+
+def purge_orphaned_files(supabase: Client) -> None:
+    """Tömmer varje mapp `{user_id}/{analysis_id}/` vars analys inte finns (#18).
+
+    Fångar filer som blev kvar när en filradering misslyckades eller när en uppladdning
+    hann före raderingen. En analys som håller på att skapas rörs inte: raden skapas
+    innan filerna laddas upp.
+    """
+    for user_folder in _list_all(supabase, ""):
+        folders = {
+            name: f"{user_folder}/{name}"
+            for name in _list_all(supabase, user_folder)
+            if _is_uuid(name)
+        }
+        if not folders:
+            continue
+        existing = {
+            r["id"]
+            for r in supabase.table("analysis_batches")
+            .select("id")
+            .in_("id", list(folders))
+            .execute()
+            .data
+        }
+        for analysis_id, folder in folders.items():
+            if analysis_id in existing:
+                continue
+            try:
+                _remove_folder(supabase, folder)
+            except Exception:
+                # En mapp som inte går att tömma ska inte hindra övriga. Nästa körning provar igen.
+                logger.exception("Kunde inte ta bort föräldralösa filer i %s", folder)
+
+
+def _list_all(supabase: Client, folder: str) -> list[str]:
+    """Alla namn direkt under en mapp i lagringen, sida för sida."""
+    bucket = supabase.storage.from_(BUCKET)
+    names: list[str] = []
+    while True:
+        page = bucket.list(folder, {"limit": LIST_PAGE, "offset": len(names)})
+        names += [f["name"] for f in page]
+        if len(page) < LIST_PAGE:
+            return names
+
+
+def _is_uuid(value: str) -> bool:
+    try:
+        uuid.UUID(value)
+    except ValueError:
+        return False
+    return True
+
+
+def _purge_expired_analyses(supabase: Client) -> int:
     deleted = 0
     while True:
         expired = (
