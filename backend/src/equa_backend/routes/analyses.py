@@ -498,32 +498,46 @@ def change_job_ad(
         )
     quota = _quota(supabase, user, settings)
     _check_quota(quota, candidates, "change_ad")
-    updated = (
-        supabase.table("analysis_batches")
-        .update({"job_ad": job_ad})
-        .eq("id", str(analysis_id))
-        .execute()
-        .data
-    )
-    if not updated:  # raderad under anropet
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Analysen finns inte.")
-    analysis["job_ad"] = job_ad
-    # Atomärt anspråk som i /run: ett CV som redan körs tas inte en gång till.
-    claimed = _candidates(
-        supabase.table("candidates")
-        .update(
-            {
-                "status": "queued",
-                "step": None,
-                "last_progress_at": datetime.now(UTC).isoformat(),
-                **CLEARED_ASSESSMENT,
-            }
+    old_ad = analysis["job_ad"]
+
+    def set_ad(new: str, expected: str) -> bool:
+        # Villkorat på den annons vi läste, så två samtidiga ändringar inte båda går igenom.
+        return bool(
+            supabase.table("analysis_batches")
+            .update({"job_ad": new})
+            .eq("id", str(analysis_id))
+            .eq("job_ad", expected)
+            .execute()
+            .data
         )
-        .eq("analysis_id", str(analysis_id))
-        .not_.in_("status", list(IN_FLIGHT))
-        .execute()
-        .data
-    )
+
+    if not set_ad(job_ad, old_ad):
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "Analysen ändrades samtidigt från ett annat håll. Ladda om sidan och försök igen.",
+        )
+    analysis["job_ad"] = job_ad
+    try:
+        # Atomärt anspråk som i /run: ett CV som redan körs tas inte en gång till.
+        claimed = _candidates(
+            supabase.table("candidates")
+            .update(
+                {
+                    "status": "queued",
+                    "step": None,
+                    "last_progress_at": datetime.now(UTC).isoformat(),
+                    **CLEARED_ASSESSMENT,
+                }
+            )
+            .eq("analysis_id", str(analysis_id))
+            .not_.in_("status", list(IN_FLIGHT))
+            .execute()
+            .data
+        )
+    except Exception:
+        # Annars står den nya annonsen kvar ovanpå bedömningar mot den gamla.
+        set_ad(old_ad, job_ad)
+        raise
     claimed_ids = {c.id for c in claimed}
     candidates = claimed + [c for c in candidates if c.id not in claimed_ids]
     background.add_task(

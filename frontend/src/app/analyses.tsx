@@ -143,6 +143,10 @@ export function Analyses({ me, onMeChanged }: { me: Me; onMeChanged: () => void 
       return true;
     } catch (e) {
       setError((e as Error).message);
+      // Läget kan ha ändrats (körning startad, kvot förbrukad), så knapparna ska spegla det.
+      getAnalysis(id)
+        .then(setSelected)
+        .catch(() => {});
       return false;
     } finally {
       onMeChanged();
@@ -348,13 +352,13 @@ function JobAd({
   const [draft, setDraft] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const running = analysis.state === "running";
-  const count = analysis.progress.total;
+  const cvCount = analysis.progress.total;
   const changed = draft !== null && draft.trim() !== "" && draft.trim() !== analysis.job_ad;
 
   async function save() {
     if (draft === null) return;
     const ok = confirm(
-      `Alla ${count} CV:n körs om mot den nya annonsen och drar upp till ${count} från kvoten. ` +
+      `Alla ${cvCount} CV:n körs om mot den nya annonsen och drar upp till ${cvCount} från kvoten. ` +
         "De nuvarande bedömningarna försvinner.",
     );
     if (!ok) return;
@@ -390,7 +394,7 @@ function JobAd({
           />
           {!analysis.can_rerun_all && (
             <p className="text-zinc-600">
-              Att ändra annonsen kör om alla {count} CV:n, men du har {remaining} kvar den här
+              Att ändra annonsen kör om alla {cvCount} CV:n, men du har {remaining} kvar den här
               månaden.
             </p>
           )}
