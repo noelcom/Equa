@@ -5,6 +5,7 @@ fejkar bara Anthropic-klienten (specens två testgränser). Varje test skapar
 egna användare och raderar dem efteråt, så annan data i projektet lämnas ifred.
 """
 
+import json
 import threading
 import time
 import uuid
@@ -52,8 +53,8 @@ ASSESS_TOKENS = 2_500
 class FakeAnthropic:
     """Fejkad Anthropic-klient med förutbestämda svar.
 
-    Tvätt-anropet är `messages.create` (text), bedömningen är `messages.parse`
-    (strukturerad utdata). Poängen läses ur CV-textens rad 'POÄNG n', så ett test
+    Båda anropen är `messages.create`. Bedömningen känns igen på `output_config`
+    (strukturerad utdata) och svarar med JSON-text som pipelinen tolkar själv. Poängen läses ur CV-textens rad 'POÄNG n', så ett test
     bestämmer utfallet via CV:ts innehåll och inte via anropsordningen.
     """
 
@@ -91,6 +92,11 @@ class FakeAnthropic:
         return [_text_of(kw) for k, kw in self.calls if k == kind]
 
     def create(self, **kwargs):
+        if "output_config" in kwargs:
+            return self.assess(**kwargs)
+        return self.wash(**kwargs)
+
+    def wash(self, **kwargs):
         self._enter("wash", kwargs)
         try:
             text = _text_of(kwargs)
@@ -116,7 +122,7 @@ class FakeAnthropic:
         finally:
             self._leave()
 
-    def parse(self, **kwargs):
+    def assess(self, **kwargs):
         self._enter("assess", kwargs)
         try:
             text = _text_of(kwargs)
@@ -136,11 +142,17 @@ class FakeAnthropic:
                     "missing_requirements": "Inga större gap.",
                     "rationale": "Bra matchning mot annonsen.",
                 }
+            raw = json.dumps(fields)
             if ASSESS_TOKENS > kwargs["max_tokens"]:
-                # Avklippt JSON: messages.parse kastar då ValidationError, som det riktiga SDK:t.
-                kwargs["output_format"].model_validate_json('{"score": 5')
-            parsed = kwargs["output_format"](**fields)
-            return SimpleNamespace(parsed_output=parsed, usage=_usage())
+                # Som riktiga API:t: JSON:en klipps och stop_reason säger varför.
+                block = SimpleNamespace(type="text", text=raw[: len(raw) // 2])
+                return SimpleNamespace(
+                    content=[block], usage=_usage(), stop_reason="max_tokens"
+                )
+            block = SimpleNamespace(type="text", text=raw)
+            return SimpleNamespace(
+                content=[block], usage=_usage(), stop_reason="end_turn"
+            )
         finally:
             self._leave()
 

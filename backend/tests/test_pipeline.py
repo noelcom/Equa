@@ -177,6 +177,26 @@ def test_ai_answer_that_breaks_the_schema_fails_the_cv_instead_of_scoring_it_zer
     assert "tolkas" in broken["failure_reason"]
 
 
+def test_truncated_assessment_gets_its_own_reason_and_is_logged_not_scored_zero(
+    client, make_user, anthropic_fake, monkeypatch, caplog
+):
+    from equa_backend import pipeline
+
+    monkeypatch.setattr(pipeline, "ASSESS_MAX_TOKENS", 1_000)
+    user = make_user()
+    analysis = _analysis(client, user, [("a.pdf", cv("Utvecklare.\nPOÄNG 66"))])
+
+    with caplog.at_level("WARNING"):
+        _run(client, user, analysis["id"])
+
+    [candidate] = _get(client, user, analysis["id"])["candidates"]
+    assert candidate["status"] == "failed"
+    assert candidate["assessment"] is None
+    assert candidate["failure_reason"] == "Bedömningen blev för lång och avbröts."
+    assert "max_tokens" in caplog.text
+    assert "Utvecklare" not in caplog.text
+
+
 def _valid_assessment(text: str) -> dict:
     from helpers import score_marker
 
@@ -443,7 +463,7 @@ def _status_error(cls, status_code):
 
 def _flaky(anthropic_fake, kind, error, failures):
     """Låter de första `failures` anropen av `kind` kasta `error`, därefter går de bra."""
-    real = getattr(anthropic_fake, "create" if kind == "wash" else "parse")
+    real = getattr(anthropic_fake, kind)
     state = {"left": failures}
 
     def wrapper(**kwargs):
@@ -452,7 +472,7 @@ def _flaky(anthropic_fake, kind, error, failures):
             raise error
         return real(**kwargs)
 
-    setattr(anthropic_fake, "create" if kind == "wash" else "parse", wrapper)
+    setattr(anthropic_fake, kind, wrapper)
 
 
 def test_transient_anthropic_errors_are_retried_and_the_cv_still_gets_scored(
@@ -556,9 +576,9 @@ def test_empty_assessment_answer_fails_the_cv_instead_of_scoring_it_zero(
     from types import SimpleNamespace
 
     def empty(**kwargs):
-        return SimpleNamespace(parsed_output=None, stop_reason="refusal")
+        return SimpleNamespace(content=[], stop_reason="refusal")
 
-    anthropic_fake.parse = empty
+    anthropic_fake.assess = empty
     user = make_user()
     analysis = _analysis(client, user, [("a.pdf", cv("Utvecklare.\nPOÄNG 66"))])
 

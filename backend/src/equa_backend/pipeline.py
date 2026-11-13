@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 
 import anthropic
+from anthropic import transform_schema
 from pydantic import BaseModel, Field, ValidationError
 from supabase import Client, create_client
 
@@ -103,6 +104,12 @@ class Assessment(BaseModel):
             "annonsen. Inga gissningar eller risker om personen."
         )
     )
+
+
+_ASSESSMENT_FORMAT = {
+    "type": "json_schema",
+    "schema": transform_schema(Assessment.model_json_schema()),
+}
 
 
 @dataclass
@@ -208,46 +215,54 @@ def _assess(
     washed: str,
     usage: Usage,
 ) -> Assessment:
-    try:
-        response = _with_retry(
-            settings,
-            lambda: client.messages.parse(
-                model=settings.assessment_model,
-                max_tokens=ASSESS_MAX_TOKENS,
-                system=[
-                    {
-                        "type": "text",
-                        "text": ASSESSMENT_INSTRUCTION,
-                        "cache_control": {"type": "ephemeral"},
-                    }
-                ],
-                messages=[
-                    {
-                        "role": "user",
-                        "content": [
-                            # Annonsen är gemensam för alla CV:n i analysen och cachas.
-                            {
-                                "type": "text",
-                                "text": f"ARBETSANNONS:\n{job_ad}",
-                                "cache_control": {"type": "ephemeral"},
-                            },
-                            {
-                                "type": "text",
-                                "text": f"KANDIDATENS ANONYMISERADE CV:\n{washed}",
-                            },
-                        ],
-                    }
-                ],
-                output_format=Assessment,
-            ),
-        )
-    except ValidationError:
-        # AI-svaret följde inte schemat. Aldrig poäng 0: CV:t blir "kunde inte analyseras".
-        raise PipelineError("Bedömningen kunde inte tolkas.") from None
+    # messages.create i stället för messages.parse: parse kastar ValidationError på ett
+    # avklippt svar innan stop_reason går att läsa (#27).
+    response = _with_retry(
+        settings,
+        lambda: client.messages.create(
+            model=settings.assessment_model,
+            max_tokens=ASSESS_MAX_TOKENS,
+            system=[
+                {
+                    "type": "text",
+                    "text": ASSESSMENT_INSTRUCTION,
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ],
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        # Annonsen är gemensam för alla CV:n i analysen och cachas.
+                        {
+                            "type": "text",
+                            "text": f"ARBETSANNONS:\n{job_ad}",
+                            "cache_control": {"type": "ephemeral"},
+                        },
+                        {
+                            "type": "text",
+                            "text": f"KANDIDATENS ANONYMISERADE CV:\n{washed}",
+                        },
+                    ],
+                }
+            ],
+            output_config={"format": _ASSESSMENT_FORMAT},
+        ),
+    )
     usage.add(response)
-    if response.parsed_output is None:
-        raise PipelineError("Bedömningen kunde inte tolkas.")
-    return response.parsed_output
+    if getattr(response, "stop_reason", None) == "max_tokens":
+        # Avklippt svar: orsaken är gränsen, inte schemat. Loggen har inget CV-innehåll.
+        log.warning(
+            "Bedömningen klipptes av vid max_tokens (%d). Höj ASSESS_MAX_TOKENS.",
+            ASSESS_MAX_TOKENS,
+        )
+        raise PipelineError("Bedömningen blev för lång och avbröts.")
+    raw = "".join(b.text for b in response.content if b.type == "text")
+    try:
+        # Aldrig poäng 0: ett svar som bryter mot schemat blir "kunde inte analyseras".
+        return Assessment.model_validate_json(raw)
+    except ValidationError:
+        raise PipelineError("Bedömningen kunde inte tolkas.") from None
 
 
 def _process(
