@@ -332,6 +332,43 @@ def test_wash_uses_haiku_assessment_uses_sonnet_and_shared_prompt_is_cached(
         assert "cache_control" not in cv_text
 
 
+def _long_cv(chars: int, score: int) -> bytes:
+    line = (
+        "Ledde migreringen av tolv tjänster till Kubernetes utan driftstopp, 2021-2023."
+    )
+    lines = [line] * (chars // (len(line) + 1))
+    return cv("\n".join(lines) + f"\nPOÄNG {score}")
+
+
+def test_long_cv_is_scored_although_thinking_shares_the_token_budget(
+    client, make_user, anthropic_fake
+):
+    # Ungefär sex sidor svensk text, som mätningen i #24. Thinking räknas mot max_tokens
+    # och fick tidigare både tvätt och bedömning att klippas.
+    user = make_user()
+    analysis = _analysis(client, user, [("lang.pdf", _long_cv(20_000, 77))])
+
+    _run(client, user, analysis["id"])
+
+    [candidate] = _get(client, user, analysis["id"])["candidates"]
+    assert candidate["status"] == "done", candidate["failure_reason"]
+    assert candidate["assessment"]["score"] == 77
+
+
+def test_cv_far_beyond_ten_pages_is_stopped_as_too_long(
+    client, make_user, anthropic_fake
+):
+    user = make_user()
+    analysis = _analysis(client, user, [("enorm.pdf", _long_cv(60_000, 77))])
+
+    _run(client, user, analysis["id"])
+
+    [candidate] = _get(client, user, analysis["id"])["candidates"]
+    assert candidate["status"] == "failed"
+    assert candidate["failure_reason"] == "CV:t var för långt för att anonymiseras."
+    assert anthropic_fake.texts_sent("assess") == []
+
+
 def test_empty_wash_answer_fails_the_cv_instead_of_scoring_it(
     client, make_user, anthropic_fake
 ):

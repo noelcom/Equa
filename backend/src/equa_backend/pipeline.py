@@ -30,6 +30,15 @@ def analysis_folder(user_id: str, analysis_id: str) -> str:
 
 log = logging.getLogger(__name__)
 
+# Thinking är på som standard på Haiku 5.5 och Sonnet 5.5 och räknas mot max_tokens (#24).
+# Tvätten skriver ut hela CV:t igen: ett CV på 2 650 ord blev 9 100 tokens text plus
+# ~1 500 thinking. 20 000 räcker för ungefär tio sidor svensk text och är det högsta
+# SDK:n tillåter utan streaming. Ett längre CV stoppas som "för långt".
+WASH_MAX_TOKENS = 20_000
+# Bedömningen behövde 2 300-2 500 tokens (~1 500 JSON plus ~900 thinking) oavsett
+# CV-längd, så 2 000 klippte varje svar. 8 000 ger god marginal.
+ASSESS_MAX_TOKENS = 8_000
+
 WASH_INSTRUCTION = """\
 Du är en strikt dataskydds-assistent. Din enda uppgift är att ta CV-texten och \
 byta ut allt som kan identifiera personen mot "[BORTTAGET]": namn, fysiska \
@@ -175,7 +184,7 @@ def _wash(
         settings,
         lambda: client.messages.create(
             model=settings.wash_model,
-            max_tokens=8192,
+            max_tokens=WASH_MAX_TOKENS,
             system=WASH_INSTRUCTION,
             messages=[{"role": "user", "content": text}],
         ),
@@ -204,7 +213,7 @@ def _assess(
             settings,
             lambda: client.messages.parse(
                 model=settings.assessment_model,
-                max_tokens=2000,
+                max_tokens=ASSESS_MAX_TOKENS,
                 system=[
                     {
                         "type": "text",

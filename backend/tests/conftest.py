@@ -40,6 +40,14 @@ def _text_of(kwargs: dict) -> str:
     return "\n".join(parts)
 
 
+# Tokenbehov uppmätta mot riktiga Haiku 5.5 och Sonnet 5.5 med thinking på (#24).
+# Svensk CV-text: ~2,16 tecken per token. Fejken klipper svaret som API:t gör när
+# max_tokens inte räcker.
+CHARS_PER_TOKEN = 2.1
+WASH_THINKING_TOKENS = 1_800
+ASSESS_TOKENS = 2_500
+
+
 @dataclass
 class FakeAnthropic:
     """Fejkad Anthropic-klient med förutbestämda svar.
@@ -92,8 +100,19 @@ class FakeAnthropic:
                 washed = text
                 for name in self.names:
                     washed = washed.replace(name, "[BORTTAGET]")
+            if (
+                len(washed) / CHARS_PER_TOKEN + WASH_THINKING_TOKENS
+                > kwargs["max_tokens"]
+            ):
+                # Som riktiga API:t: texten klipps och stop_reason säger varför.
+                block = SimpleNamespace(type="text", text=washed[: len(washed) // 2])
+                return SimpleNamespace(
+                    content=[block], usage=_usage(), stop_reason="max_tokens"
+                )
             block = SimpleNamespace(type="text", text=washed)
-            return SimpleNamespace(content=[block], usage=_usage())
+            return SimpleNamespace(
+                content=[block], usage=_usage(), stop_reason="end_turn"
+            )
         finally:
             self._leave()
 
@@ -117,6 +136,9 @@ class FakeAnthropic:
                     "missing_requirements": "Inga större gap.",
                     "rationale": "Bra matchning mot annonsen.",
                 }
+            if ASSESS_TOKENS > kwargs["max_tokens"]:
+                # Avklippt JSON: messages.parse kastar då ValidationError, som det riktiga SDK:t.
+                kwargs["output_format"].model_validate_json('{"score": 5')
             parsed = kwargs["output_format"](**fields)
             return SimpleNamespace(parsed_output=parsed, usage=_usage())
         finally:
