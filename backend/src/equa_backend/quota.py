@@ -93,6 +93,10 @@ class QuotaSnapshot:
     def can_run(self, candidates: list[Candidate]) -> bool:
         return self.runnable_count(candidates) <= self.remaining
 
+    def can_rerun_all(self, candidates: list[Candidate]) -> bool:
+        """Räcker kvoten till att köra om alla CV:n, som när annonsen ändras?"""
+        return len(candidates) <= self.remaining
+
     def addable_count(self, candidates: list[Candidate]) -> int:
         """Så många CV:n till ryms, när analysens ej körda CV:n räknas med."""
         return max(self.remaining - self.runnable_count(candidates), 0)

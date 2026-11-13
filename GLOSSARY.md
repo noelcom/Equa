@@ -18,7 +18,7 @@ Format: **Svensk term** (kodnamn) – definition. _Undvik:_ synonymer vi inte an
 
 **Analys** (`analysis_batch`) – en rekryteringsomgång: en arbetsannons plus de CV:n som laddats upp mot den. CV:n kan läggas till i efterhand. _Undvik:_ batch i användargränssnittet, körning.
 
-**Arbetsannons** (`job_ad`) – texten rekryteraren klistrar in. Allt bedöms mot den.
+**Arbetsannons** (`job_ad`) – texten rekryteraren klistrar in. Allt bedöms mot den. Kan ändras när ingen körning pågår. Då körs alla analysens CV:n om mot den nya texten direkt, och de gamla bedömningarna försvinner, så ingen bedömning finns mot en annons som inte längre gäller. Ändringen görs bara om kvoten räcker till alla. Bara den senaste annonsen sparas.
 
 **Anonym alias** (`anonymous_alias`) – "Kandidat #N". Det enda namn som syns i gränssnitt och export.
 
@@ -54,7 +54,7 @@ Format: **Svensk term** (kodnamn) – definition. _Undvik:_ synonymer vi inte an
 
 **Raderingsdatum** (`expires_at`, TTL) – när analysen och dess originalfiler raderas automatiskt. Standard 7 dagar, valbart eget datum. Taket är 90 dagar från den dag datumet sätts, så kunden kan förlänga aktivt hur många gånger som helst. Raderingen går igenom även mitt i en körning.
 
-**Kvot** (`cv_quota_limit`) – max antal lyckade CV:n per kalendermånad, standard 500. Kontrolleras före en körning, när en analys skapas och när CV:n läggs till (analysens ej körda CV:n plus de nya), så det som laddas upp också går att köra. Ett CV är lyckat först när bedömningen är sparad, så ett CV vars analys raderades under körningen räknas inte.
+**Kvot** (`cv_quota_limit`) – max antal lyckade CV:n per kalendermånad, standard 500. Kontrolleras före en körning, när en analys skapas, när CV:n läggs till (analysens ej körda CV:n plus de nya, så det som laddas upp också går att köra) och när arbetsannonsen ändras (alla analysens CV:n). Ett CV är lyckat först när bedömningen är sparad, så ett CV vars analys raderades under körningen räknas inte.
 
 **Återstående kvot** – kvoten minus månadens lyckade CV:n och de reserverade. Det är siffran som avgör om något får laddas upp eller köras.
 
