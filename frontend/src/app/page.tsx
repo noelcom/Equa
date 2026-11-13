@@ -5,6 +5,7 @@ import type { Session } from "@supabase/supabase-js";
 import { getMe, type Me } from "@/lib/api";
 import { supabase } from "@/lib/supabase";
 import { Analyses } from "./analyses";
+import { DataHandling } from "./data-handling";
 
 export default function Home() {
   const [session, setSession] = useState<Session | null>(null);
@@ -101,6 +102,7 @@ function Profile({ email }: { email: string }) {
           </p>
         </div>
       )}
+      {me && <DataHandling me={me} />}
       {me && <Analyses me={me} onMeChanged={refreshMe} />}
       <button onClick={() => supabase.auth.signOut()} className="self-start text-sm underline">
         Logga ut
