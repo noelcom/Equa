@@ -1,11 +1,13 @@
 """Raderingsdatum, flytta fram, radera direkt och det schemalagda raderingsjobbet (ADR 0007)."""
 
+import uuid
 from datetime import UTC, datetime, timedelta
 
-from helpers import ClientWithFailingStorage, make_pdf
+from helpers import ClientWithFailingStorage, file_exists, make_pdf, original_paths
 
+from equa_backend import retention
 from equa_backend.deps import get_supabase
-from equa_backend.retention import delete_analysis, purge_expired
+from equa_backend.retention import delete_analysis, run_purge_job
 
 
 def _create(client, user, expires_at=None, files=None):
@@ -117,22 +119,6 @@ def test_another_user_cannot_change_or_delete_the_analysis(client, make_user):
     assert client.get(url, headers=owner.auth).status_code == 200
 
 
-def _file_exists(admin, path: str) -> bool:
-    folder, name = path.rsplit("/", 1)
-    return any(f["name"] == name for f in admin.storage.from_("originals").list(folder))
-
-
-def _paths(admin, analysis_id: str) -> list[str]:
-    rows = (
-        admin.table("candidates")
-        .select("original_path")
-        .eq("analysis_id", analysis_id)
-        .execute()
-        .data
-    )
-    return [r["original_path"] for r in rows]
-
-
 def test_delete_now_removes_analysis_candidates_and_original_files(
     client, make_user, admin
 ):
@@ -140,8 +126,8 @@ def test_delete_now_removes_analysis_candidates_and_original_files(
     analysis = _create(
         client, user, files=[("a.pdf", make_pdf("A")), ("b.pdf", make_pdf("B"))]
     ).json()
-    paths = _paths(admin, analysis["id"])
-    assert len(paths) == 2 and all(_file_exists(admin, p) for p in paths)
+    paths = original_paths(admin, analysis["id"])
+    assert len(paths) == 2 and all(file_exists(admin, p) for p in paths)
 
     res = client.delete(f"/analyses/{analysis['id']}", headers=user.auth)
 
@@ -157,7 +143,7 @@ def test_delete_now_removes_analysis_candidates_and_original_files(
         .data
         == []
     )
-    assert not any(_file_exists(admin, p) for p in paths)
+    assert not any(file_exists(admin, p) for p in paths)
 
 
 def test_delete_now_also_removes_files_without_a_candidate_row(
@@ -174,7 +160,7 @@ def test_delete_now_also_removes_files_without_a_candidate_row(
     res = client.delete(f"/analyses/{analysis['id']}", headers=user.auth)
 
     assert res.status_code == 204
-    assert not _file_exists(admin, stray)
+    assert not file_exists(admin, stray)
 
 
 def test_analysis_is_gone_even_if_the_files_cannot_be_removed_and_the_job_takes_them(
@@ -182,7 +168,7 @@ def test_analysis_is_gone_even_if_the_files_cannot_be_removed_and_the_job_takes_
 ):
     user = make_user()
     analysis = _create(client, user).json()
-    paths = _paths(admin, analysis["id"])
+    paths = original_paths(admin, analysis["id"])
 
     # Kastar inte: analysen är borta och raderingsjobbet tar filerna senare.
     delete_analysis(ClientWithFailingStorage(admin), analysis["id"])
@@ -190,11 +176,11 @@ def test_analysis_is_gone_even_if_the_files_cannot_be_removed_and_the_job_takes_
     assert (
         client.get(f"/analyses/{analysis['id']}", headers=user.auth).status_code == 404
     )
-    assert all(_file_exists(admin, p) for p in paths)
+    assert all(file_exists(admin, p) for p in paths)
 
-    purge_expired(admin)
+    run_purge_job(admin)
 
-    assert not any(_file_exists(admin, p) for p in paths)
+    assert not any(file_exists(admin, p) for p in paths)
 
 
 class _ClientThatDeletesTheAnalysisOnUpload:
@@ -256,13 +242,16 @@ def test_purge_job_deletes_expired_analyses_and_files_but_keeps_the_rest(
     user = make_user()
     expired = _create(client, user).json()
     kept = _create(client, user).json()
-    expired_paths, kept_paths = _paths(admin, expired["id"]), _paths(admin, kept["id"])
+    expired_paths, kept_paths = (
+        original_paths(admin, expired["id"]),
+        original_paths(admin, kept["id"]),
+    )
     # Utgånget datum kan inte sättas via API:et, så det sätts direkt i databasen.
     admin.table("analysis_batches").update(
         {"expires_at": _in(minutes=-1).isoformat()}
     ).eq("id", expired["id"]).execute()
 
-    purge_expired(admin)
+    run_purge_job(admin)
 
     assert (
         client.get(f"/analyses/{expired['id']}", headers=user.auth).status_code == 404
@@ -275,9 +264,9 @@ def test_purge_job_deletes_expired_analyses_and_files_but_keeps_the_rest(
         .data
         == []
     )
-    assert not any(_file_exists(admin, p) for p in expired_paths)
+    assert not any(file_exists(admin, p) for p in expired_paths)
     assert client.get(f"/analyses/{kept['id']}", headers=user.auth).status_code == 200
-    assert all(_file_exists(admin, p) for p in kept_paths)
+    assert all(file_exists(admin, p) for p in kept_paths)
 
 
 def test_purge_job_removes_folders_whose_analysis_is_gone_but_keeps_the_rest(
@@ -287,16 +276,37 @@ def test_purge_job_removes_folders_whose_analysis_is_gone_but_keeps_the_rest(
     orphaned = _create(client, user).json()
     kept = _create(client, user).json()
     orphaned_paths, kept_paths = (
-        _paths(admin, orphaned["id"]),
-        _paths(admin, kept["id"]),
+        original_paths(admin, orphaned["id"]),
+        original_paths(admin, kept["id"]),
     )
     # Läget efter en radering där filerna inte gick att ta bort.
     admin.table("analysis_batches").delete().eq("id", orphaned["id"]).execute()
 
-    purge_expired(admin)
+    run_purge_job(admin)
 
-    assert not any(_file_exists(admin, p) for p in orphaned_paths)
-    assert all(_file_exists(admin, p) for p in kept_paths)
+    assert not any(file_exists(admin, p) for p in orphaned_paths)
+    assert all(file_exists(admin, p) for p in kept_paths)
+
+
+def test_purge_job_checks_folders_in_batches_and_keeps_analyses_in_every_batch(
+    client, make_user, admin, monkeypatch
+):
+    # Med många analyser får inte alla id plats i ett anrop. Små bitar i testet
+    # ger samma läge med fem mappar.
+    monkeypatch.setattr(retention, "ORPHAN_CHECK_BATCH", 2)
+    user = make_user()
+    kept = [_create(client, user).json() for _ in range(2)]
+    kept_paths = [p for a in kept for p in original_paths(admin, a["id"])]
+    orphaned = [f"{user.id}/{uuid.uuid4()}/kvar.pdf" for _ in range(3)]
+    for path in orphaned:
+        admin.storage.from_("originals").upload(
+            path, make_pdf("Kvar"), {"content-type": "application/pdf"}
+        )
+
+    run_purge_job(admin)
+
+    assert not any(file_exists(admin, p) for p in orphaned)
+    assert all(file_exists(admin, p) for p in kept_paths)
 
 
 def test_usage_log_survives_deletion(client, make_user, admin):
@@ -309,7 +319,7 @@ def test_usage_log_survives_deletion(client, make_user, admin):
         {"expires_at": _in(minutes=-1).isoformat()}
     ).eq("id", analysis["id"]).execute()
 
-    purge_expired(admin)
+    run_purge_job(admin)
     second = _create(client, user).json()
     client.delete(f"/analyses/{second['id']}", headers=user.auth)
 

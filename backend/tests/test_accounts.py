@@ -1,7 +1,12 @@
 """Kontoradering (#14): analyser, filer, profil och auth-användare försvinner, loggen finns kvar."""
 
 import pytest
-from helpers import ClientWithFailingStorage, make_pdf
+from helpers import (
+    ClientWithFailingStorage,
+    file_exists,
+    make_pdf,
+    user_original_paths,
+)
 
 from equa_backend.accounts import delete_account
 
@@ -20,22 +25,6 @@ def _create(client, user, n=1):
     return ids
 
 
-def _paths(admin, user_id: str) -> list[str]:
-    rows = (
-        admin.table("analysis_batches")
-        .select("candidates(original_path)")
-        .eq("user_id", user_id)
-        .execute()
-        .data
-    )
-    return [c["original_path"] for a in rows for c in a["candidates"]]
-
-
-def _file_exists(admin, path: str) -> bool:
-    folder, name = path.rsplit("/", 1)
-    return any(f["name"] == name for f in admin.storage.from_("originals").list(folder))
-
-
 def _user_exists(admin, user_id: str) -> bool:
     return any(u.id == user_id for u in admin.auth.admin.list_users(per_page=1000))
 
@@ -46,8 +35,8 @@ def test_account_deletion_removes_everything_but_keeps_the_usage_log(
     user, other = make_user(), make_user()
     _create(client, user, n=2)
     other_ids = _create(client, other)
-    paths = _paths(admin, user.id)
-    assert len(paths) == 2 and all(_file_exists(admin, p) for p in paths)
+    paths = user_original_paths(admin, user.id)
+    assert len(paths) == 2 and all(file_exists(admin, p) for p in paths)
     admin.table("usage_logs").insert(
         {"customer_id": user.id, "cv_count": 1, "input_tokens": 10, "output_tokens": 5}
     ).execute()
@@ -62,7 +51,7 @@ def test_account_deletion_removes_everything_but_keeps_the_usage_log(
         .data
         == []
     )
-    assert not any(_file_exists(admin, p) for p in paths)
+    assert not any(file_exists(admin, p) for p in paths)
     assert admin.table("profiles").select("id").eq("id", user.id).execute().data == []
     assert not _user_exists(admin, user.id)
     logs = (
@@ -84,7 +73,7 @@ def test_failed_file_deletion_stops_and_leaves_the_account_so_a_rerun_removes_th
 ):
     user = make_user()
     _create(client, user, n=2)
-    paths = _paths(admin, user.id)
+    paths = user_original_paths(admin, user.id)
     # Profilen skapas vid första inloggning (anropet ovan), så den finns att bevara.
     assert admin.table("profiles").select("id").eq("id", user.id).execute().data
 
@@ -93,11 +82,11 @@ def test_failed_file_deletion_stops_and_leaves_the_account_so_a_rerun_removes_th
 
     # Kontot finns kvar så att skriptet kan köras om. Filerna finns kvar i användarens mapp.
     assert _user_exists(admin, user.id)
-    assert all(_file_exists(admin, p) for p in paths)
+    assert all(file_exists(admin, p) for p in paths)
 
     # Ny körning efter felet raderar resten.
     delete_account(admin, user.id)
-    assert not any(_file_exists(admin, p) for p in paths)
+    assert not any(file_exists(admin, p) for p in paths)
     assert not _user_exists(admin, user.id)
 
 
@@ -106,7 +95,7 @@ def test_rerun_works_when_files_are_already_gone_but_rows_remain(
 ):
     user = make_user()
     _create(client, user)
-    paths = _paths(admin, user.id)
+    paths = user_original_paths(admin, user.id)
     # Läget efter ett avbrott mellan filradering och radradering.
     admin.storage.from_("originals").remove(paths)
 
