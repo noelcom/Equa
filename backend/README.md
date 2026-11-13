@@ -11,6 +11,8 @@ Kommandon (från `backend/`):
 
 Konsekvenstest av bedömningssteget (ADR 0008, ±5 poäng): `uv run python scripts/consistency.py [testdata-mapp]`. Kör varje `cv-*.txt` i `testdata/` genom tvätten en gång och bedömningen två gånger mot `annons-techlead.txt`, och skriver största poängskillnad. Ett CV som tvätten stoppar som för långt hoppas över. Anropar riktiga Anthropic och kostar pengar (ca 3 minuter), så det ingår inte i `pytest`. `--runs N` ger fler bedömningar per CV.
 
+Kontroll av AI-tvätten (ADR 0008): `uv run python scripts/wash_check.py [testdata-mapp]`. Tvättar varje `cv-*.txt` och rapporterar identifierare som finns kvar (namn och adresser listade i `testdata/identifierare.txt`, en per rad, samt könspronomen och kontaktuppgifter) och siffror och facktermer som ändrats. Anropar riktiga Anthropic och kostar pengar (ca 2 minuter), så det ingår inte i `pytest`. Kontrollen av sakinnehåll är grov: läs listan, den kan ge falsklarm.
+
 Profilraden skapas först vid första inloggningen, så kvoten (`cv_quota_limit`) kan bara sättas efter den.
 
 Frontend: `npm run check` i `frontend/` (typkontroll och lint).
