@@ -1,6 +1,7 @@
 """Excel-export av en analys: anonym alias och bedömning, aldrig originalfilnamn (ADR 0007)."""
 
 import io
+from collections.abc import Callable
 
 from openpyxl import Workbook
 
@@ -29,10 +30,26 @@ HEADER = [
 ]
 
 
-def build_workbook(candidates: list[Candidate], alias) -> bytes:
-    """Alla kandidater, bedömda först med högst poäng överst, som en xlsx-fil.
+def _row(c: Candidate, alias: Callable[[int], str]) -> list:
+    if c.status != "done":
+        return [alias(c.number), STATUS_LABELS[c.status]] + [None] * (len(HEADER) - 2)
+    return [
+        alias(c.number),
+        STATUS_LABELS[c.status],
+        c.score,
+        c.years_experience,
+        c.education_match,
+        c.concrete_results,
+        ", ".join(c.key_skills),
+        c.missing_requirements,
+        c.rationale,
+    ]
 
-    `candidates` ska redan vara i leaderboardens ordning. Raden bär bara alias och
+
+def build_workbook(candidates: list[Candidate], alias: Callable[[int], str]) -> bytes:
+    """Alla kandidater som en xlsx-fil, i den ordning de ges (leaderboardens).
+
+    `alias` ger kandidatens anonyma namn utifrån löpnumret. Raden bär bara alias och
     bedömning, så inget i filen kan peka tillbaka på originalfilen.
     """
     wb = Workbook()
@@ -40,20 +57,7 @@ def build_workbook(candidates: list[Candidate], alias) -> bytes:
     ws.title = "Resultat"
     ws.append(HEADER)
     for c in candidates:
-        done = c.status == "done"
-        ws.append(
-            [
-                alias(c.number),
-                STATUS_LABELS[c.status],
-                c.score if done else None,
-                c.years_experience if done else None,
-                c.education_match if done else None,
-                c.concrete_results if done else None,
-                ", ".join(c.key_skills) if done else None,
-                c.missing_requirements if done else None,
-                c.rationale if done else None,
-            ]
-        )
+        ws.append(_row(c, alias))
     # AI-text som börjar med "=" ska aldrig tolkas som formel i Excel.
     for row in ws.iter_rows(min_row=2):
         for cell in row:

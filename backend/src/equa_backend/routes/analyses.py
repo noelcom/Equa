@@ -441,7 +441,14 @@ def export_analysis(
     """Excel med anonym alias och bedömning. Originalfilnamn finns aldrig med."""
     # Filtrerar på user_id: bara ägaren kan exportera, andras analyser ser ut som att de inte finns.
     analysis = _own_analysis(supabase, user, analysis_id)
-    ranked = sorted(_candidates(analysis["candidates"]), key=_rank_key)
+    candidates = _candidates(analysis["candidates"])
+    if _state(candidates) != "finished":
+        # En halvfärdig fil vore missvisande: poängen och rangordningen kan ändras.
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "Analysen är inte klar än. Exportera när alla CV:n är färdiga.",
+        )
+    ranked = sorted(candidates, key=_rank_key)
     return Response(
         content=build_workbook(ranked, _alias),
         media_type=XLSX_MEDIA_TYPE,

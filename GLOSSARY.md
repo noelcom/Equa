@@ -22,7 +22,7 @@ Format: **Svensk term** (kodnamn) – definition. _Undvik:_ synonymer vi inte an
 
 **Anonym alias** (`anonymous_alias`) – "Kandidat #N". Det enda namn som syns i gränssnitt och export.
 
-**Excel-export** – analysen som xlsx: en rad per kandidat med alias, status, poäng och bedömning, bedömda först. Originalfilnamn finns aldrig med. Bara ägaren kan exportera.
+**Excel-export** – analysen som xlsx: en rad per kandidat med alias, status, poäng och bedömning, bedömda först. Originalfilnamn finns aldrig med. Bara ägaren kan exportera, och först när hela analysen är klar (inget CV uppladdat, köat eller under bearbetning).
 
 **Leaderboard** – alla kandidater i en analys, sorterade efter poäng. Ingen kandidat filtreras bort. Misslyckade CV:n visas i en egen sektion.
 

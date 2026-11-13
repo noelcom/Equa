@@ -441,7 +441,7 @@ function AnalysisView({
         <div className="flex flex-col gap-2">
           <div className="flex items-baseline justify-between gap-3">
             <h3 className="font-medium">Leaderboard</h3>
-            <ExportButton analysisId={analysis.id} />
+            {analysis.state === "finished" && <ExportButton analysisId={analysis.id} />}
           </div>
           <p className="text-xs text-zinc-600">
             Poängen är ett beslutsstöd. Urvalet gör alltid du.

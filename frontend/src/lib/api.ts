@@ -89,6 +89,16 @@ async function errorMessage(res: Response, fallback: string): Promise<string> {
   return `${fallback} (${res.status}).`;
 }
 
+async function downloadBlob(res: Response, filename: string): Promise<void> {
+  const url = URL.createObjectURL(await res.blob());
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  a.click();
+  // Vänta lite så webbläsaren hinner starta nedladdningen innan URL:en släpps.
+  setTimeout(() => URL.revokeObjectURL(url), 10_000);
+}
+
 export async function getMe(): Promise<Me> {
   const res = await authedFetch("/me");
   if (!res.ok) throw new Error(`Kunde inte hämta profilen (${res.status}).`);
@@ -117,25 +127,14 @@ export async function runAnalysis(id: string): Promise<Analysis> {
 export async function revealCandidate(analysisId: string, number: number): Promise<void> {
   const res = await authedFetch(`/analyses/${analysisId}/candidates/${number}/original`);
   if (!res.ok) throw new Error(await errorMessage(res, "Kunde inte avslöja kandidaten"));
-  const url = URL.createObjectURL(await res.blob());
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = `Kandidat-${number}.pdf`;
-  a.click();
-  // Vänta lite så webbläsaren hinner starta nedladdningen innan URL:en släpps.
-  setTimeout(() => URL.revokeObjectURL(url), 10_000);
+  await downloadBlob(res, `Kandidat-${number}.pdf`);
 }
 
 // Excel med anonym alias och bedömning. Originalfilnamn finns aldrig med.
 export async function exportAnalysis(analysisId: string): Promise<void> {
   const res = await authedFetch(`/analyses/${analysisId}/export`);
   if (!res.ok) throw new Error(await errorMessage(res, "Kunde inte exportera analysen"));
-  const url = URL.createObjectURL(await res.blob());
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = "Equa-analys.xlsx";
-  a.click();
-  setTimeout(() => URL.revokeObjectURL(url), 10_000);
+  await downloadBlob(res, "Equa-analys.xlsx");
 }
 
 export async function createAnalysis(

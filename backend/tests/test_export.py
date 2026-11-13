@@ -3,7 +3,7 @@
 import io
 import zipfile
 
-from helpers import cv
+from helpers import cv, make_pdf
 from openpyxl import load_workbook
 
 XLSX = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
@@ -65,15 +65,37 @@ def test_export_has_alias_score_and_assessment_ranked_by_score(client, make_user
     assert top["Motivering"] == "Bra matchning mot annonsen."
 
 
-def test_export_lists_every_candidate_including_ones_not_assessed(client, make_user):
+def test_export_lists_every_candidate_including_failed_ones(client, make_user):
     user = make_user()
-    analysis = _analysis(client, user, [("cv.pdf", cv("Kodare\nPOÄNG 70"))])
+    analysis = _analysis(
+        client,
+        user,
+        [
+            ("scan.pdf", make_pdf("")),  # ingen text, som en inskannad bild
+            ("ok.pdf", cv("Kodare\nPOÄNG 70")),
+        ],
+    )
+    _run(client, user, analysis["id"])
 
     res = _export(client, user, analysis["id"])
 
     _, rows = _rows(res)
-    assert [r["Kandidat"] for r in rows] == ["Kandidat #1"]
-    assert rows[0]["Poäng"] is None
+    assert [r["Kandidat"] for r in rows] == ["Kandidat #2", "Kandidat #1"]
+    assert rows[1]["Status"] == "Kunde inte analyseras"
+    assert rows[1]["Poäng"] is None
+
+
+def test_export_is_refused_until_the_whole_analysis_is_finished(client, make_user):
+    user = make_user()
+    analysis = _analysis(client, user, [("cv.pdf", cv("Kodare\nPOÄNG 70"))])
+
+    before = _export(client, user, analysis["id"])
+    _run(client, user, analysis["id"])
+    after = _export(client, user, analysis["id"])
+
+    assert before.status_code == 409
+    assert before.content[:2] != b"PK"
+    assert after.status_code == 200
 
 
 def test_export_never_contains_the_original_filename(client, make_user):
