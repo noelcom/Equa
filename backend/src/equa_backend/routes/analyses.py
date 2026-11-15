@@ -35,6 +35,7 @@ from equa_backend.deps import (
     get_supabase,
 )
 from equa_backend.export import XLSX_MEDIA_TYPE, build_workbook
+from equa_backend.identity import Identity, decrypt_identity
 from equa_backend.pipeline import BUCKET, Assessment, analysis_folder
 from equa_backend.quota import QuotaSnapshot, snapshot
 from equa_backend.retention import (
@@ -61,6 +62,15 @@ class CandidateOut(BaseModel):
     step: PipelineStep | None
     assessment: Assessment | None
     failure_reason: str | None
+    # Båda är tomma tills kandidaten avslöjats. Identiteten skickas aldrig för en
+    # kandidat som inte är avslöjad (ADR 0009).
+    revealed_at: datetime | None
+    identity: Identity | None
+
+
+class RevealOut(BaseModel):
+    revealed_at: datetime
+    identity: Identity
 
 
 class Progress(BaseModel):
@@ -107,6 +117,13 @@ def _alias(number: int) -> str:
     return f"Kandidat #{number}"
 
 
+def _identity_of(c: Candidate) -> Identity | None:
+    """Identiteten i klartext, men bara för en avslöjad kandidat."""
+    if c.revealed_at is None:
+        return None
+    return decrypt_identity(get_settings().identity_key, c.identity_encrypted)
+
+
 def _candidate_out(c: Candidate) -> CandidateOut:
     assessment = None
     if c.status == "done":
@@ -126,6 +143,8 @@ def _candidate_out(c: Candidate) -> CandidateOut:
         step=c.step,
         assessment=assessment,
         failure_reason=c.failure_reason,
+        revealed_at=c.revealed_at,
+        identity=_identity_of(c),
     )
 
 
@@ -575,6 +594,42 @@ def export_analysis(
         content=build_workbook(ranked, _alias),
         media_type=XLSX_MEDIA_TYPE,
         headers={"Content-Disposition": 'attachment; filename="Equa-analys.xlsx"'},
+    )
+
+
+@router.post("/{analysis_id}/candidates/{number}/reveal", response_model=RevealOut)
+def reveal(
+    analysis_id: uuid.UUID,
+    number: int,
+    user: Annotated[CurrentUser, Depends(get_current_user)],
+    supabase: Annotated[Client, Depends(get_supabase)],
+) -> RevealOut:
+    """Avslöja: visar vem kandidaten är. Går inte att ångra (ADR 0009)."""
+    analysis = _live_analysis(supabase, user, analysis_id)
+    candidate = next(
+        (c for c in _candidates(analysis["candidates"]) if c.number == number), None
+    )
+    if candidate is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Kandidaten finns inte.")
+    if candidate.revealed_at is None:
+        # Bara den första av två samtidiga avslöjanden skriver tidpunkten.
+        (
+            supabase.table("candidates")
+            .update({"revealed_at": datetime.now(UTC).isoformat()})
+            .eq("id", candidate.id)
+            .is_("revealed_at", "null")
+            .execute()
+        )
+        rows = (
+            supabase.table("candidates").select("*").eq("id", candidate.id).execute()
+        ).data
+        if not rows:
+            # Analysen raderades just nu.
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "Kandidaten finns inte.")
+        candidate = Candidate.model_validate(rows[0])
+    return RevealOut(
+        revealed_at=candidate.revealed_at,
+        identity=_identity_of(candidate) or Identity(),
     )
 
 

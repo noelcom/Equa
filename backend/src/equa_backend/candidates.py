@@ -30,6 +30,10 @@ class Candidate(BaseModel):
     missing_requirements: str | None = None
     rationale: str | None = None
     failure_reason: str | None = None
+    # Krypterad identitet (ADR 0009). Skickas aldrig till webbläsaren som den är.
+    identity_encrypted: str | None = None
+    # När rekryteraren avslöjade kandidaten. Satt en gång, aldrig ändrad.
+    revealed_at: datetime | None = None
     # Hjärtslagsstämpel: senaste framsteg medan CV:t körs.
     last_progress_at: datetime | None = None
 

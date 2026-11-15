@@ -17,6 +17,7 @@ import {
   type Candidate,
   type Me,
   type PipelineStep,
+  type Revealed,
 } from "@/lib/api";
 import { formatResetDate } from "@/lib/dates";
 
@@ -669,13 +670,23 @@ function RankedCandidate({
 }) {
   const a = candidate.assessment;
   const [error, setError] = useState<string | null>(null);
+  // Svaret från avslöjandet visas direkt. Nästa gång analysen hämtas följer det med i kandidaten.
+  const [justRevealed, setJustRevealed] = useState<Revealed | null>(null);
   if (!a) return null;
+  const revealedAt = candidate.revealed_at ?? justRevealed?.revealed_at ?? null;
+  const identity = candidate.identity ?? justRevealed?.identity ?? null;
   return (
     <li className="rounded border border-zinc-300 p-3">
       <details>
         <summary className="flex cursor-pointer items-baseline justify-between gap-3">
           <span>
             <span className="text-zinc-600">{rank}.</span> {candidate.alias}
+            {revealedAt && (
+              <>
+                {" · "}
+                <span className="font-medium">{identity?.name ?? "Kunde inte läsas ut"}</span>
+              </>
+            )}
           </span>
           <span className="font-medium">{a.score} / 100</span>
         </summary>
@@ -687,15 +698,22 @@ function RankedCandidate({
           <Detail label="Saknade krav">{a.missing_requirements}</Detail>
           <Detail label="Motivering">{a.rationale}</Detail>
         </dl>
-        <button
-          onClick={() => {
-            setError(null);
-            revealCandidate(analysisId, candidate.number).catch((e: Error) => setError(e.message));
-          }}
-          className="mt-3 rounded border border-zinc-300 px-3 py-1 text-sm"
-        >
-          Avslöja (ladda ner originalfil)
-        </button>
+        {revealedAt ? (
+          <p className="mt-3 text-sm text-zinc-600">Avslöjad {formatDate(revealedAt)}</p>
+        ) : (
+          <button
+            onClick={() => {
+              if (!confirm(`Visa vem ${candidate.alias} är? Det går inte att ångra.`)) return;
+              setError(null);
+              revealCandidate(analysisId, candidate.number)
+                .then(setJustRevealed)
+                .catch((e: Error) => setError(e.message));
+            }}
+            className="mt-3 rounded border border-zinc-300 px-3 py-1 text-sm"
+          >
+            Visa vem det är
+          </button>
+        )}
         {error && <p className="mt-1 text-sm text-red-600">{error}</p>}
       </details>
     </li>

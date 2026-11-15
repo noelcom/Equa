@@ -55,7 +55,7 @@ def main() -> int:
     for cv in cvs:
         text = pre_wash(cv.read_text(encoding="utf-8"))
         try:
-            washed = _wash(client, settings, text, Usage())
+            washed = _wash(client, settings, text, Usage()).washed_text
         except PipelineError as e:
             print(f"{cv.name}: hoppas över ({e.reason})")
             continue

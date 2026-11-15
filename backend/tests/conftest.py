@@ -92,9 +92,11 @@ class FakeAnthropic:
         return [_text_of(kw) for k, kw in self.calls if k == kind]
 
     def create(self, **kwargs):
-        if "output_config" in kwargs:
-            return self.assess(**kwargs)
-        return self.wash(**kwargs)
+        # Båda stegen använder strukturerad utdata. Tvätten känns igen på sitt schema.
+        properties = kwargs["output_config"]["format"]["schema"]["properties"]
+        if "washed_text" in properties:
+            return self.wash(**kwargs)
+        return self.assess(**kwargs)
 
     def wash(self, **kwargs):
         self._enter("wash", kwargs)
@@ -106,16 +108,19 @@ class FakeAnthropic:
                 washed = text
                 for name in self.names:
                     washed = washed.replace(name, "[BORTTAGET]")
+            # Namnet som tvätten läser ut: den första av `names` som finns i CV:t.
+            found = next((n for n in self.names if n in text), None)
+            raw = json.dumps({"washed_text": washed, "name": found})
             if (
                 len(washed) / CHARS_PER_TOKEN + WASH_THINKING_TOKENS
                 > kwargs["max_tokens"]
             ):
-                # Som riktiga API:t: texten klipps och stop_reason säger varför.
-                block = SimpleNamespace(type="text", text=washed[: len(washed) // 2])
+                # Som riktiga API:t: JSON:en klipps och stop_reason säger varför.
+                block = SimpleNamespace(type="text", text=raw[: len(raw) // 2])
                 return SimpleNamespace(
                     content=[block], usage=_usage(), stop_reason="max_tokens"
                 )
-            block = SimpleNamespace(type="text", text=washed)
+            block = SimpleNamespace(type="text", text=raw)
             return SimpleNamespace(
                 content=[block], usage=_usage(), stop_reason="end_turn"
             )

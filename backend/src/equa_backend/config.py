@@ -1,8 +1,10 @@
 from functools import lru_cache
 from pathlib import Path
 
-from pydantic import Field
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+from equa_backend.identity import is_valid_key
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
@@ -14,6 +16,10 @@ class Settings(BaseSettings):
     supabase_anon_key: str
     supabase_service_role_key: str
     anthropic_api_key: str = ""
+    # Nyckel som krypterar kandidaternas identitet innan den sparas (ADR 0009). Backend startar
+    # inte utan en giltig nyckel. Skapa en med:
+    # uv run python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+    identity_key: str
     # Modellval per pipelinesteg, låst efter jämförelse mot piloten (#12). Byte av modell
     # kräver att kriterierna i ADR 0008 klaras.
     wash_model: str = "claude-haiku-5-5"
@@ -29,6 +35,13 @@ class Settings(BaseSettings):
     purge_interval_seconds: float = Field(default=3600, gt=0, le=3600)
     # Adresser som får anropa API:et från en webbläsare. Frontendens adress i drift läggs till här.
     cors_origins: list[str] = ["http://localhost:3000"]
+
+    @field_validator("identity_key")
+    @classmethod
+    def _identity_key_is_valid(cls, value: str) -> str:
+        if not is_valid_key(value):
+            raise ValueError("identity_key måste vara en giltig Fernet-nyckel")
+        return value
 
 
 @lru_cache
