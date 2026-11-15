@@ -26,6 +26,10 @@ export type Assessment = {
 export type CandidateStatus = "uploaded" | "queued" | "processing" | "done" | "failed";
 export type PipelineStep = "pre_wash" | "ai_wash" | "safety_check" | "assessment";
 
+// Identiteten följer med först när kandidaten är avslöjad (ADR 0009). name är null när
+// namnet inte kunde läsas ut.
+export type Identity = { name: string | null };
+
 export type Candidate = {
   alias: string;
   number: number;
@@ -33,7 +37,12 @@ export type Candidate = {
   step: PipelineStep | null;
   assessment: Assessment | null;
   failure_reason: string | null;
+  // Båda är null tills kandidaten avslöjats.
+  revealed_at: string | null;
+  identity: Identity | null;
 };
+
+export type Revealed = { revealed_at: string; identity: Identity };
 
 export type Analysis = {
   id: string;
@@ -120,11 +129,13 @@ export async function runAnalysis(id: string): Promise<Analysis> {
   return res.json();
 }
 
-// Avslöja: laddar ner originalfilen för en kandidat. Loggas inte (ADR 0007).
-export async function revealCandidate(analysisId: string, number: number): Promise<void> {
-  const res = await authedFetch(`/analyses/${analysisId}/candidates/${number}/original`);
+// Avslöja: visar vem kandidaten är. Går inte att ångra (ADR 0009).
+export async function revealCandidate(analysisId: string, number: number): Promise<Revealed> {
+  const res = await authedFetch(`/analyses/${analysisId}/candidates/${number}/reveal`, {
+    method: "POST",
+  });
   if (!res.ok) throw new Error(await errorMessage(res, "Kunde inte avslöja kandidaten"));
-  await downloadBlob(res, `Kandidat-${number}.pdf`);
+  return res.json();
 }
 
 // Excel med anonym alias och bedömning. Originalfilnamn finns aldrig med.

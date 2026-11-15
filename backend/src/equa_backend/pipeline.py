@@ -18,6 +18,7 @@ from supabase import Client, create_client
 from equa_backend.anonymize import contains_contact_details, pre_wash
 from equa_backend.candidates import Candidate
 from equa_backend.config import Settings
+from equa_backend.identity import Identity, encrypt_identity
 from equa_backend.pdf import UnreadablePdf, pdf_to_text
 from equa_backend.quota import write_usage_log
 
@@ -80,6 +81,15 @@ Poängskala (0-100):
 Skriv alla bedömningstexter på svenska."""
 
 
+class WashResult(BaseModel):
+    """AI-tvättens svar. Namnet sparas krypterat och når aldrig bedömningssteget."""
+
+    washed_text: str = Field(description="CV-texten med identifierare ersatta.")
+    name: str | None = Field(
+        description="Personens fullständiga namn, första träffen. Tomt om inget finns."
+    )
+
+
 class Assessment(BaseModel):
     """Bedömningen av en kandidat. Fast schema som AI:n måste följa."""
 
@@ -105,6 +115,11 @@ class Assessment(BaseModel):
         )
     )
 
+
+_WASH_FORMAT = {
+    "type": "json_schema",
+    "schema": transform_schema(WashResult.model_json_schema()),
+}
 
 _ASSESSMENT_FORMAT = {
     "type": "json_schema",
@@ -186,7 +201,7 @@ def _with_retry(settings: Settings, call):
 
 def _wash(
     client: anthropic.Anthropic, settings: Settings, text: str, usage: Usage
-) -> str:
+) -> WashResult:
     response = _with_retry(
         settings,
         lambda: client.messages.create(
@@ -194,18 +209,26 @@ def _wash(
             max_tokens=WASH_MAX_TOKENS,
             system=WASH_INSTRUCTION,
             messages=[{"role": "user", "content": text}],
+            output_config={"format": _WASH_FORMAT},
         ),
     )
     usage.add(response)
     if getattr(response, "stop_reason", None) == "max_tokens":
         # Ett avklippt CV skulle ge en orättvist låg poäng.
         raise PipelineError("CV:t var för långt för att anonymiseras.")
-    washed = "".join(b.text for b in response.content if b.type == "text")
-    if getattr(response, "stop_reason", None) == "refusal" or not washed.strip():
+    raw = "".join(b.text for b in response.content if b.type == "text")
+    try:
+        result = WashResult.model_validate_json(raw)
+    except ValidationError:
+        raise PipelineError("Kunde inte anonymiseras säkert.") from None
+    if (
+        getattr(response, "stop_reason", None) == "refusal"
+        or not result.washed_text.strip()
+    ):
         # Ett tomt svar eller en vägran får aldrig matas vidare: en tom text skulle
         # ge en missvisande låg poäng i stället för "kunde inte analyseras".
         raise PipelineError("Kunde inte anonymiseras säkert.")
-    return washed
+    return result
 
 
 def _assess(
@@ -289,8 +312,16 @@ def _process(
             ) from None
         text = pre_wash(text)
         _set(supabase, candidate_id, step="ai_wash")
-        washed = _wash(client, settings, text, usage)
-        _set(supabase, candidate_id, step="safety_check")
+        wash = _wash(client, settings, text, usage)
+        washed = wash.washed_text
+        # Namnet krypteras och sparas här, men skickas aldrig vidare till bedömningen.
+        # Hittas inget namn lämnas en tidigare sparad identitet orörd (omkörning).
+        identity = {}
+        if wash.name and wash.name.strip():
+            identity["identity_encrypted"] = encrypt_identity(
+                settings.identity_key, Identity(name=wash.name.strip())
+            )
+        _set(supabase, candidate_id, step="safety_check", **identity)
         if contains_contact_details(washed):
             raise PipelineError("Kunde inte anonymiseras säkert.")
         _set(supabase, candidate_id, step="assessment")

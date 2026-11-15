@@ -55,7 +55,7 @@ def main() -> int:
             usage = Usage()
             washed = _wash(
                 client, settings, pre_wash(cv.read_text(encoding="utf-8")), usage
-            )
+            ).washed_text
             scores = [
                 _assess(client, settings, job_ad, washed, usage).score
                 for _ in range(args.runs)
