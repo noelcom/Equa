@@ -611,6 +611,12 @@ def reveal(
     )
     if candidate is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Kandidaten finns inte.")
+    if candidate.status not in FINISHED:
+        # Lyckade och misslyckade går att avslöja; uppladdade, köade och pågående inte.
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "Kandidaten går inte att avslöja förrän analysen är klar.",
+        )
     if candidate.revealed_at is None:
         # Bara den första av två samtidiga avslöjanden skriver tidpunkten.
         (

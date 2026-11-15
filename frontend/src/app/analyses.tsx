@@ -583,10 +583,7 @@ function AnalysisView({
           <h3 className="font-medium">Kunde inte analyseras</h3>
           <ul className="flex flex-col gap-1">
             {failed.map((c) => (
-              <li key={c.alias} className="rounded border border-zinc-300 p-2 text-sm">
-                {c.alias}
-                <span className="block text-zinc-600">{c.failure_reason}</span>
-              </li>
+              <FailedCandidate key={c.alias} analysisId={analysis.id} candidate={c} />
             ))}
           </ul>
         </div>
@@ -667,6 +664,93 @@ function contactValue(identity: Identity | null, value: string | null | undefine
   return value ?? "Finns inte i CV:t";
 }
 
+// "Visa vem det är" med bekräftelse, och därefter uppgifterna och nedladdningen.
+// Gemensam för bedömda kandidater och för dem som inte kunde analyseras.
+function RevealPanel({
+  analysisId,
+  candidate,
+  revealedAt,
+  identity,
+  onRevealed,
+}: {
+  analysisId: string;
+  candidate: Candidate;
+  revealedAt: string | null;
+  identity: Identity | null;
+  onRevealed: (r: Revealed) => void;
+}) {
+  const [error, setError] = useState<string | null>(null);
+  return (
+    <>
+      {revealedAt ? (
+        <div className="mt-3 text-sm">
+          <dl className="grid grid-cols-[auto_1fr] gap-x-3">
+            {candidate.status !== "done" && (
+              <>
+                <dt className="text-zinc-600">Namn</dt>
+                <dd>{contactValue(identity, identity?.name)}</dd>
+              </>
+            )}
+            <dt className="text-zinc-600">E-post</dt>
+            <dd>{contactValue(identity, identity?.email)}</dd>
+            <dt className="text-zinc-600">Telefon</dt>
+            <dd>{contactValue(identity, identity?.phone)}</dd>
+          </dl>
+          <p className="mt-1 text-zinc-600">Avslöjad {formatDate(revealedAt)}</p>
+          <button
+            onClick={() => {
+              setError(null);
+              downloadOriginal(analysisId, candidate.number).catch((e: Error) =>
+                setError(e.message),
+              );
+            }}
+            className="mt-3 rounded border border-zinc-300 px-3 py-1 text-sm"
+          >
+            Ladda ner originalfilen
+          </button>
+        </div>
+      ) : (
+        <button
+          onClick={() => {
+            if (!confirm(`Visa vem ${candidate.alias} är? Det går inte att ångra.`)) return;
+            setError(null);
+            revealCandidate(analysisId, candidate.number)
+              .then(onRevealed)
+              .catch((e: Error) => setError(e.message));
+          }}
+          className="mt-3 rounded border border-zinc-300 px-3 py-1 text-sm"
+        >
+          Visa vem det är
+        </button>
+      )}
+      {error && <p className="mt-1 text-sm text-red-600">{error}</p>}
+    </>
+  );
+}
+
+function FailedCandidate({
+  analysisId,
+  candidate,
+}: {
+  analysisId: string;
+  candidate: Candidate;
+}) {
+  const [justRevealed, setJustRevealed] = useState<Revealed | null>(null);
+  return (
+    <li className="rounded border border-zinc-300 p-2 text-sm">
+      {candidate.alias}
+      <span className="block text-zinc-600">{candidate.failure_reason}</span>
+      <RevealPanel
+        analysisId={analysisId}
+        candidate={candidate}
+        revealedAt={candidate.revealed_at ?? justRevealed?.revealed_at ?? null}
+        identity={candidate.identity ?? justRevealed?.identity ?? null}
+        onRevealed={setJustRevealed}
+      />
+    </li>
+  );
+}
+
 function RankedCandidate({
   analysisId,
   candidate,
@@ -677,7 +761,6 @@ function RankedCandidate({
   rank: number;
 }) {
   const a = candidate.assessment;
-  const [error, setError] = useState<string | null>(null);
   // Svaret från avslöjandet visas direkt. Nästa gång analysen hämtas följer det med i kandidaten.
   const [justRevealed, setJustRevealed] = useState<Revealed | null>(null);
   if (!a) return null;
@@ -708,42 +791,13 @@ function RankedCandidate({
           <Detail label="Saknade krav">{a.missing_requirements}</Detail>
           <Detail label="Motivering">{a.rationale}</Detail>
         </dl>
-        {revealedAt ? (
-          <div className="mt-3 text-sm">
-            <dl className="grid grid-cols-[auto_1fr] gap-x-3">
-              <dt className="text-zinc-600">E-post</dt>
-              <dd>{contactValue(identity, identity?.email)}</dd>
-              <dt className="text-zinc-600">Telefon</dt>
-              <dd>{contactValue(identity, identity?.phone)}</dd>
-            </dl>
-            <p className="mt-1 text-zinc-600">Avslöjad {formatDate(revealedAt)}</p>
-            <button
-              onClick={() => {
-                setError(null);
-                downloadOriginal(analysisId, candidate.number).catch((e: Error) =>
-                  setError(e.message),
-                );
-              }}
-              className="mt-3 rounded border border-zinc-300 px-3 py-1 text-sm"
-            >
-              Ladda ner originalfilen
-            </button>
-          </div>
-        ) : (
-          <button
-            onClick={() => {
-              if (!confirm(`Visa vem ${candidate.alias} är? Det går inte att ångra.`)) return;
-              setError(null);
-              revealCandidate(analysisId, candidate.number)
-                .then(setJustRevealed)
-                .catch((e: Error) => setError(e.message));
-            }}
-            className="mt-3 rounded border border-zinc-300 px-3 py-1 text-sm"
-          >
-            Visa vem det är
-          </button>
-        )}
-        {error && <p className="mt-1 text-sm text-red-600">{error}</p>}
+        <RevealPanel
+          analysisId={analysisId}
+          candidate={candidate}
+          revealedAt={revealedAt}
+          identity={identity}
+          onRevealed={setJustRevealed}
+        />
       </details>
     </li>
   );

@@ -310,3 +310,61 @@ def test_ad_change_keeps_the_revealed_and_does_not_reveal_the_others(
     assert by_number[2]["revealed_at"] is None
     assert by_number[2].get("identity") is None
     assert all(c["status"] == "done" for c in candidates)
+
+
+def test_failed_scanned_cv_can_be_revealed_without_identity_and_downloaded(
+    client, make_user, anthropic_fake
+):
+    from helpers import make_pdf
+
+    user = make_user()
+    scan = make_pdf("")  # ingen text, som en inskannad bild
+    analysis = _create(client, user, [("scan.pdf", scan)])
+    _run(client, user, analysis["id"])
+    assert _get(client, user, analysis["id"]).json()["candidates"][0]["status"] == (
+        "failed"
+    )
+
+    res = _reveal(client, user, analysis["id"])
+
+    assert res.status_code == 200, res.text
+    assert res.json()["identity"] == {
+        "extracted": False,
+        "name": None,
+        "email": None,
+        "phone": None,
+    }
+    download = client.get(
+        f"/analyses/{analysis['id']}/candidates/1/original", headers=user.auth
+    )
+    assert download.status_code == 200
+    assert download.content == scan
+
+
+def test_candidate_not_yet_run_cannot_be_revealed(client, make_user, anthropic_fake):
+    user = make_user()
+    analysis = _create(client, user, [("cv.pdf", cv(f"{NAME}\nPOÄNG 70"))])
+
+    res = _reveal(client, user, analysis["id"])
+
+    assert res.status_code == 409
+    assert (
+        _get(client, user, analysis["id"]).json()["candidates"][0]["revealed_at"]
+        is None
+    )
+
+
+def test_queued_and_processing_candidates_cannot_be_revealed(
+    client, make_user, anthropic_fake, admin
+):
+    user = make_user()
+    analysis = _create(
+        client, user, [("a.pdf", cv("POÄNG 70")), ("b.pdf", cv("POÄNG 60"))]
+    )
+    for number, status in ((1, "queued"), (2, "processing")):
+        admin.table("candidates").update({"status": status}).eq(
+            "analysis_id", analysis["id"]
+        ).eq("number", number).execute()
+
+    assert _reveal(client, user, analysis["id"], 1).status_code == 409
+    assert _reveal(client, user, analysis["id"], 2).status_code == 409

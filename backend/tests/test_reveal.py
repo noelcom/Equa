@@ -2,7 +2,13 @@
 
 import logging
 
+import pytest
 from helpers import make_pdf
+
+
+@pytest.fixture(autouse=True)
+def _fake_anthropic(anthropic_fake):
+    """Körningen i _create får aldrig nå riktiga Anthropic."""
 
 
 def _create(client, user, files):
@@ -13,7 +19,11 @@ def _create(client, user, files):
         files=[("files", (name, data, "application/pdf")) for name, data in files],
     )
     assert res.status_code == 201
-    return res.json()
+    analysis = res.json()
+    # Avslöjande kräver en klar analys (lyckad eller ej), så kör den först.
+    run = client.post(f"/analyses/{analysis['id']}/run", headers=user.auth)
+    assert run.status_code in (200, 202), run.text
+    return analysis
 
 
 def _reveal_and_download(client, user, analysis_id, number):
