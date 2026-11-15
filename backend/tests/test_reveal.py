@@ -94,7 +94,9 @@ def test_reveal_of_already_deleted_original_is_404(client, make_user, admin):
     assert res.status_code == 404
 
 
-def test_reveal_after_expiry_date_is_404_as_for_other_expired_calls(client, make_user, admin):
+def test_reveal_after_expiry_date_is_404_as_for_other_expired_calls(
+    client, make_user, admin
+):
     user = make_user()
     analysis = _create(client, user, [("cv.pdf", make_pdf("CV"))])
     admin.table("analysis_batches").update(
