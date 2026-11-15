@@ -26,9 +26,14 @@ export type Assessment = {
 export type CandidateStatus = "uploaded" | "queued" | "processing" | "done" | "failed";
 export type PipelineStep = "pre_wash" | "ai_wash" | "safety_check" | "assessment";
 
-// Identiteten följer med först när kandidaten är avslöjad (ADR 0009). name är null när
-// namnet inte kunde läsas ut.
-export type Identity = { name: string | null };
+// Identiteten följer med först när kandidaten är avslöjad (ADR 0009). extracted är false när
+// ingen identitet sparades; annars är ett fält null när CV:t saknar uppgiften.
+export type Identity = {
+  extracted: boolean;
+  name: string | null;
+  email: string | null;
+  phone: string | null;
+};
 
 export type Candidate = {
   alias: string;

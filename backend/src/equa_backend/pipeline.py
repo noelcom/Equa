@@ -15,10 +15,14 @@ from anthropic import transform_schema
 from pydantic import BaseModel, Field, ValidationError
 from supabase import Client, create_client
 
-from equa_backend.anonymize import contains_contact_details, pre_wash
+from equa_backend.anonymize import (
+    contains_contact_details,
+    extract_contacts,
+    pre_wash,
+)
 from equa_backend.candidates import Candidate
 from equa_backend.config import Settings
-from equa_backend.identity import Identity, encrypt_identity
+from equa_backend.identity import Identity, decrypt_identity, encrypt_identity
 from equa_backend.pdf import UnreadablePdf, pdf_to_text
 from equa_backend.quota import write_usage_log
 
@@ -310,18 +314,29 @@ def _process(
             raise PipelineError(
                 "Kunde inte läsa texten. Är CV:t en inskannad bild?"
             ) from None
+        email, phone = extract_contacts(text)
         text = pre_wash(text)
         _set(supabase, candidate_id, step="ai_wash")
         wash = _wash(client, settings, text, usage)
         washed = wash.washed_text
-        # Namnet krypteras och sparas här, men skickas aldrig vidare till bedömningen.
-        # Hittas inget namn lämnas en tidigare sparad identitet orörd (omkörning).
-        identity = {}
-        if wash.name and wash.name.strip():
-            identity["identity_encrypted"] = encrypt_identity(
-                settings.identity_key, Identity(name=wash.name.strip())
-            )
-        _set(supabase, candidate_id, step="safety_check", **identity)
+        # Identiteten krypteras och sparas här, men skickas aldrig vidare till
+        # bedömningen. Fält som saknas i CV:t sparas som tomma. Vid omkörning behålls
+        # tidigare sparade värden när tvätten missar något: ett avslöjande ska ligga kvar.
+        earlier = decrypt_identity(settings.identity_key, candidate.identity_encrypted)
+        identity = encrypt_identity(
+            settings.identity_key,
+            Identity(
+                name=(wash.name or "").strip() or earlier.name,
+                email=email or earlier.email,
+                phone=phone or earlier.phone,
+            ),
+        )
+        _set(
+            supabase,
+            candidate_id,
+            step="safety_check",
+            identity_encrypted=identity,
+        )
         if contains_contact_details(washed):
             raise PipelineError("Kunde inte anonymiseras säkert.")
         _set(supabase, candidate_id, step="assessment")

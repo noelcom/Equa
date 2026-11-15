@@ -89,7 +89,12 @@ def test_reveal_returns_identity_and_time(client, make_user, anthropic_fake):
 
     assert res.status_code == 200
     body = res.json()
-    assert body["identity"] == {"name": NAME}
+    assert body["identity"] == {
+        "extracted": True,
+        "name": NAME,
+        "email": None,
+        "phone": None,
+    }
     datetime.fromisoformat(body["revealed_at"])
 
 
@@ -99,7 +104,7 @@ def test_analysis_shows_identity_after_reveal(client, make_user, anthropic_fake)
 
     candidate = _get(client, user, analysis_id).json()["candidates"][0]
 
-    assert candidate["identity"] == {"name": NAME}
+    assert candidate["identity"]["name"] == NAME
     assert candidate["revealed_at"] == revealed["revealed_at"]
     assert candidate["alias"] == "Kandidat #1"
 
@@ -126,7 +131,24 @@ def test_reveal_survives_a_rerun(client, make_user, anthropic_fake):
 
     candidate = _get(client, user, analysis_id).json()["candidates"][0]
     assert candidate["revealed_at"] == first["revealed_at"]
-    assert candidate["identity"] == {"name": NAME}
+    assert candidate["identity"]["name"] == NAME
+
+
+def test_rerun_keeps_a_stored_name_the_wash_now_misses(
+    client, make_user, anthropic_fake
+):
+    user, analysis_id = _analysis_run(client, make_user, anthropic_fake)
+    anthropic_fake.names = []
+
+    res = client.put(
+        f"/analyses/{analysis_id}/job_ad",
+        headers=user.auth,
+        json={"job_ad": "En helt ny annons."},
+    )
+    assert res.status_code == 202, res.text
+
+    identity = _reveal(client, user, analysis_id).json()["identity"]
+    assert identity["name"] == NAME
 
 
 def test_reveal_requires_login(client, make_user, anthropic_fake):
@@ -165,10 +187,10 @@ def test_reveal_after_expiry_is_denied(client, make_user, anthropic_fake, admin)
     assert "Andersson" not in res.text
 
 
-def test_candidate_without_a_stored_name_reveals_an_empty_identity(
+def test_candidate_without_a_name_reveals_an_extracted_empty_identity(
     client, make_user, anthropic_fake
 ):
-    # Namnet kunde inte läsas ut: tvätten hittade inget namn att ersätta.
+    # Tvätten kördes men hittade inget namn: identiteten är utläst, bara tom.
     user = make_user()
     analysis = _create(client, user, [("cv.pdf", cv("Utvecklare.\nPOÄNG 70"))])
     _run(client, user, analysis["id"])
@@ -176,4 +198,82 @@ def test_candidate_without_a_stored_name_reveals_an_empty_identity(
     res = _reveal(client, user, analysis["id"])
 
     assert res.status_code == 200
-    assert res.json()["identity"] == {"name": None}
+    assert res.json()["identity"] == {
+        "extracted": True,
+        "name": None,
+        "email": None,
+        "phone": None,
+    }
+
+
+def test_reveal_returns_email_and_phone(client, make_user, anthropic_fake):
+    anthropic_fake.names = [NAME]
+    user = make_user()
+    body = f"{NAME}\nanna@example.com\n070-123 45 67\nUtvecklare.\nPOÄNG 70"
+    analysis = _create(client, user, [("cv.pdf", cv(body))])
+    _run(client, user, analysis["id"])
+
+    identity = _reveal(client, user, analysis["id"]).json()["identity"]
+
+    assert identity == {
+        "extracted": True,
+        "name": NAME,
+        "email": "anna@example.com",
+        "phone": "070-123 45 67",
+    }
+
+
+def test_first_email_and_first_phone_are_kept(client, make_user, anthropic_fake):
+    user = make_user()
+    body = (
+        "a@first.se b@second.se\n08-123 456 78 och 070-123 45 67\nUtvecklare.\nPOÄNG 70"
+    )
+    analysis = _create(client, user, [("cv.pdf", cv(body))])
+    _run(client, user, analysis["id"])
+
+    identity = _reveal(client, user, analysis["id"]).json()["identity"]
+
+    assert identity["email"] == "a@first.se"
+    assert identity["phone"] == "08-123 456 78"
+
+
+def test_email_and_phone_are_not_stored_in_plain_text(
+    client, make_user, anthropic_fake, admin
+):
+    user = make_user()
+    body = "anna@example.com\n070-123 45 67\nUtvecklare.\nPOÄNG 70"
+    analysis = _create(client, user, [("cv.pdf", cv(body))])
+    _run(client, user, analysis["id"])
+
+    row = (
+        admin.table("candidates")
+        .select("*")
+        .eq("analysis_id", analysis["id"])
+        .execute()
+        .data[0]
+    )
+    res = _get(client, user, analysis["id"])
+
+    assert "anna@example.com" not in str(row)
+    assert "123 45 67" not in str(row)
+    assert "anna@example.com" not in res.text
+    assert "123 45 67" not in res.text
+
+
+def test_candidate_without_stored_identity_is_not_extracted(
+    client, make_user, anthropic_fake, admin
+):
+    # Uppladdad före funktionen: ingen sparad identitet alls.
+    user, analysis_id = _analysis_run(client, make_user, anthropic_fake)
+    admin.table("candidates").update({"identity_encrypted": None}).eq(
+        "analysis_id", analysis_id
+    ).execute()
+
+    identity = _reveal(client, user, analysis_id).json()["identity"]
+
+    assert identity == {
+        "extracted": False,
+        "name": None,
+        "email": None,
+        "phone": None,
+    }

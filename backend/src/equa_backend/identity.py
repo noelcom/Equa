@@ -10,12 +10,17 @@ from pydantic import BaseModel
 
 
 class Identity(BaseModel):
-    # None: namnet kunde inte läsas ut (t.ex. CV:n som laddades upp före avslöjandet).
+    # False: ingen identitet sparades (t.ex. CV:n som laddades upp före avslöjandet).
+    # True: den lästes ut, men enskilda fält kan ändå saknas i CV:t och är då None.
+    extracted: bool = False
     name: str | None = None
+    email: str | None = None
+    phone: str | None = None
 
 
 def encrypt_identity(key: str, identity: Identity) -> str:
-    return Fernet(key).encrypt(identity.model_dump_json().encode()).decode()
+    stored = identity.model_copy(update={"extracted": True})
+    return Fernet(key).encrypt(stored.model_dump_json().encode()).decode()
 
 
 def decrypt_identity(key: str, token: str | None) -> Identity:
@@ -23,7 +28,8 @@ def decrypt_identity(key: str, token: str | None) -> Identity:
     if not token:
         return Identity()
     try:
-        return Identity.model_validate_json(Fernet(key).decrypt(token.encode()))
+        stored = Identity.model_validate_json(Fernet(key).decrypt(token.encode()))
+        return stored.model_copy(update={"extracted": True})
     except InvalidToken:
         return Identity()
 

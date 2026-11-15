@@ -15,6 +15,7 @@ import {
   type Analysis,
   type AnalysisSummary,
   type Candidate,
+  type Identity,
   type Me,
   type PipelineStep,
   type Revealed,
@@ -659,6 +660,12 @@ function AddCvs({
   );
 }
 
+// Skiljer på uppgift som saknas i CV:t och identitet som inte gick att läsa ut.
+function contactValue(identity: Identity | null, value: string | null | undefined) {
+  if (!identity?.extracted) return "Kunde inte läsas ut";
+  return value ?? "Finns inte i CV:t";
+}
+
 function RankedCandidate({
   analysisId,
   candidate,
@@ -684,7 +691,9 @@ function RankedCandidate({
             {revealedAt && (
               <>
                 {" · "}
-                <span className="font-medium">{identity?.name ?? "Kunde inte läsas ut"}</span>
+                <span className="font-medium">
+                  {contactValue(identity, identity?.name)}
+                </span>
               </>
             )}
           </span>
@@ -699,7 +708,15 @@ function RankedCandidate({
           <Detail label="Motivering">{a.rationale}</Detail>
         </dl>
         {revealedAt ? (
-          <p className="mt-3 text-sm text-zinc-600">Avslöjad {formatDate(revealedAt)}</p>
+          <div className="mt-3 text-sm">
+            <dl className="grid grid-cols-[auto_1fr] gap-x-3">
+              <dt className="text-zinc-600">E-post</dt>
+              <dd>{contactValue(identity, identity?.email)}</dd>
+              <dt className="text-zinc-600">Telefon</dt>
+              <dd>{contactValue(identity, identity?.phone)}</dd>
+            </dl>
+            <p className="mt-1 text-zinc-600">Avslöjad {formatDate(revealedAt)}</p>
+          </div>
         ) : (
           <button
             onClick={() => {
