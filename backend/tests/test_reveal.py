@@ -92,3 +92,16 @@ def test_reveal_of_already_deleted_original_is_404(client, make_user, admin):
     res = _reveal(client, user, analysis["id"], 1)
 
     assert res.status_code == 404
+
+
+def test_reveal_after_expiry_date_is_404_as_for_other_expired_calls(client, make_user, admin):
+    user = make_user()
+    analysis = _create(client, user, [("cv.pdf", make_pdf("CV"))])
+    admin.table("analysis_batches").update(
+        {"expires_at": "2000-01-01T00:00:00+00:00"}
+    ).eq("id", analysis["id"]).execute()
+
+    res = _reveal(client, user, analysis["id"], 1)
+
+    assert res.status_code == 404
+    assert res.json() == {"detail": "Analysen finns inte."}

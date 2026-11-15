@@ -589,7 +589,7 @@ def reveal_candidate(
 
     Avslöjanden loggas medvetet inte (ADR 0007).
     """
-    analysis = _own_analysis(supabase, user, analysis_id)
+    analysis = _live_analysis(supabase, user, analysis_id)
     candidate = next(
         (c for c in _candidates(analysis["candidates"]) if c.number == number), None
     )
