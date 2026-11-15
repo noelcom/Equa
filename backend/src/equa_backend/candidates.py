@@ -42,6 +42,10 @@ class Candidate(BaseModel):
             self.last_progress_at is None or self.last_progress_at < before
         )
 
+    def is_running(self, stale_before: datetime) -> bool:
+        """Körs just nu: i gång och inte fastnat. Ett fastnat CV körs inte längre."""
+        return self.status in IN_FLIGHT and not self.is_stale(stale_before)
+
     def is_runnable(self, stale_before: datetime) -> bool:
         """Ska tas av en körning: uppladdat, eller fastnat."""
         return self.status == "uploaded" or self.is_stale(stale_before)

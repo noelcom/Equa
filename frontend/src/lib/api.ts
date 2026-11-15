@@ -65,6 +65,8 @@ export type Analysis = {
   addable_count: number;
   // Räcker kvoten till att köra om alla CV:n? Krävs för att ändra annonsen.
   can_rerun_all: boolean;
+  // Går annonsen att ändra just nu? Nej så länge ett CV körs. Ett fastnat CV blockerar inte.
+  can_change_ad: boolean;
   progress: { total: number; finished: number };
   // Bedömda kandidater efter poäng (högst först), därefter övriga i nummerordning.
   candidates: Candidate[];

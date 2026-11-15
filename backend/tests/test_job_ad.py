@@ -186,3 +186,46 @@ def test_only_the_owner_can_change_the_ad(client, make_user, anthropic_fake):
     assert res.status_code == 404
     assert anthropic_fake.calls == []
     assert _get(client, alice, analysis)["job_ad"] == OLD_AD
+
+
+def _stick(admin, analysis, status, minutes_ago):
+    """Simulerar ett CV som fastnat: en körning som dog innan CV:t blev klart."""
+    from datetime import timedelta
+
+    last_progress_at = datetime.now(UTC) - timedelta(minutes=minutes_ago)
+    admin.table("candidates").update(
+        {"status": status, "last_progress_at": last_progress_at.isoformat()}
+    ).eq("analysis_id", analysis["id"]).execute()
+
+
+def test_a_stuck_cv_does_not_lock_the_ad_and_is_rerun_with_the_rest(
+    client, make_user, admin, anthropic_fake
+):
+    user = make_user()
+    analysis = _analysis(client, user, ["POÄNG 50", "POÄNG 60"])
+    _stick(admin, analysis, "processing", minutes_ago=60)
+    assert _get(client, user, analysis)["can_change_ad"] is True
+
+    res = _change_ad(client, user, analysis, NEW_AD)
+
+    assert res.status_code == 202, res.text
+    assessed = anthropic_fake.texts_sent("assess")
+    assert len(assessed) == 2
+    assert all(NEW_AD in text and OLD_AD not in text for text in assessed)
+    body = _get(client, user, analysis)
+    assert body["job_ad"] == NEW_AD
+    assert [c["status"] for c in body["candidates"]] == ["done", "done"]
+
+
+def test_analysis_tells_whether_the_ad_can_be_changed_right_now(
+    client, make_user, admin
+):
+    user = make_user()
+    analysis = _analysis(client, user, ["POÄNG 50"])
+    assert _get(client, user, analysis)["can_change_ad"] is True
+
+    _stick(admin, analysis, "processing", minutes_ago=0)
+    assert _get(client, user, analysis)["can_change_ad"] is False
+
+    _stick(admin, analysis, "processing", minutes_ago=60)
+    assert _get(client, user, analysis)["can_change_ad"] is True

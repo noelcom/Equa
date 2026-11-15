@@ -95,6 +95,8 @@ class AnalysisOut(BaseModel):
     addable_count: int
     # Räcker kvoten till att köra om alla CV:n? Krävs för att ändra annonsen.
     can_rerun_all: bool
+    # Går annonsen att ändra just nu? Nej så länge ett CV körs. Ett fastnat CV blockerar inte.
+    can_change_ad: bool
     progress: Progress
     # Leaderboard: bedömda kandidater efter poäng (högst först), därefter övriga
     # i nummerordning. Ingen kandidat filtreras bort (ADR 0003).
@@ -177,6 +179,7 @@ def _to_out(
         can_run=quota.can_run(candidates),
         addable_count=quota.addable_count(candidates),
         can_rerun_all=quota.can_rerun_all(candidates),
+        can_change_ad=not any(c.is_running(quota.stale_before) for c in candidates),
         progress=Progress(
             total=len(candidates),
             finished=sum(c.status in FINISHED for c in candidates),
@@ -509,13 +512,14 @@ def change_job_ad(
             "Annonsen är samma som förut. Inget kördes om.",
         )
     candidates = _candidates(analysis["candidates"])
-    if _state(candidates) == "running":
-        # Annars bedöms en del CV:n mot den gamla texten mitt i bytet.
+    quota = _quota(supabase, user, settings)
+    if any(c.is_running(quota.stale_before) for c in candidates):
+        # Annars bedöms en del CV:n mot den gamla texten mitt i bytet. Ett fastnat CV
+        # körs inte längre och tas om med de andra.
         raise HTTPException(
             status.HTTP_409_CONFLICT,
             "Annonsen kan inte ändras medan analysen körs. Vänta tills den är klar.",
         )
-    quota = _quota(supabase, user, settings)
     _check_quota(quota, candidates, "change_ad")
     old_ad = analysis["job_ad"]
 
@@ -538,21 +542,31 @@ def change_job_ad(
     analysis["job_ad"] = job_ad
     try:
         # Atomärt anspråk som i /run: ett CV som redan körs tas inte en gång till.
-        claimed = _candidates(
-            supabase.table("candidates")
-            .update(
-                {
-                    "status": "queued",
-                    "step": None,
-                    "last_progress_at": datetime.now(UTC).isoformat(),
-                    **CLEARED_ASSESSMENT,
-                }
+        # Fastnade CV:n tas om med de andra.
+        claim = {
+            "status": "queued",
+            "step": None,
+            "last_progress_at": datetime.now(UTC).isoformat(),
+            **CLEARED_ASSESSMENT,
+        }
+        cutoff = quota.stale_before.isoformat()
+
+        def claim_rows():
+            return (
+                supabase.table("candidates")
+                .update(claim)
+                .eq("analysis_id", str(analysis_id))
             )
-            .eq("analysis_id", str(analysis_id))
-            .not_.in_("status", list(IN_FLIGHT))
+
+        idle = claim_rows().not_.in_("status", list(IN_FLIGHT)).execute().data
+        stuck = (
+            claim_rows()
+            .in_("status", list(IN_FLIGHT))
+            .or_(f"last_progress_at.is.null,last_progress_at.lt.{cutoff}")
             .execute()
             .data
         )
+        claimed = _candidates(idle + stuck)
     except Exception:
         # Annars står den nya annonsen kvar ovanpå bedömningar mot den gamla.
         set_ad(old_ad, job_ad)
