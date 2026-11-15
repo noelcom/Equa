@@ -354,7 +354,7 @@ function JobAd({
 }) {
   const [draft, setDraft] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
-  const running = analysis.state === "running";
+  const blocked = !analysis.can_change_ad;
   const cvCount = analysis.progress.total;
   const changed = draft !== null && draft.trim() !== "" && draft.trim() !== analysis.job_ad;
 
@@ -377,13 +377,13 @@ function JobAd({
         <div className="mt-3 flex flex-col gap-2">
           <p className="whitespace-pre-wrap text-zinc-700">{analysis.job_ad}</p>
           <button
-            disabled={running}
+            disabled={blocked}
             onClick={() => setDraft(analysis.job_ad)}
             className="self-start rounded border border-zinc-300 px-3 py-1 disabled:opacity-50"
           >
             Ändra annons
           </button>
-          {running && (
+          {blocked && (
             <p className="text-zinc-600">Annonsen kan ändras när körningen är klar.</p>
           )}
         </div>
@@ -403,7 +403,7 @@ function JobAd({
           )}
           <div className="flex gap-2">
             <button
-              disabled={!changed || !analysis.can_rerun_all || running || saving}
+              disabled={!changed || !analysis.can_rerun_all || blocked || saving}
               onClick={() => void save()}
               className="rounded bg-black px-3 py-1 text-white disabled:opacity-50"
             >

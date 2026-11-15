@@ -95,6 +95,8 @@ class AnalysisOut(BaseModel):
     addable_count: int
     # Räcker kvoten till att köra om alla CV:n? Krävs för att ändra annonsen.
     can_rerun_all: bool
+    # Går annonsen att ändra just nu? Nej så länge ett CV körs. Ett fastnat CV blockerar inte.
+    can_change_ad: bool
     progress: Progress
     # Leaderboard: bedömda kandidater efter poäng (högst först), därefter övriga
     # i nummerordning. Ingen kandidat filtreras bort (ADR 0003).
@@ -177,6 +179,7 @@ def _to_out(
         can_run=quota.can_run(candidates),
         addable_count=quota.addable_count(candidates),
         can_rerun_all=quota.can_rerun_all(candidates),
+        can_change_ad=not any(c.is_running(quota.stale_before) for c in candidates),
         progress=Progress(
             total=len(candidates),
             finished=sum(c.status in FINISHED for c in candidates),
@@ -464,19 +467,6 @@ class JobAdRequest(BaseModel):
     job_ad: str
 
 
-# Tömmer bedömningen, så ingen gammal poäng står kvar mot en annons som inte gäller längre.
-CLEARED_ASSESSMENT = {
-    "score": None,
-    "years_experience": None,
-    "education_match": None,
-    "concrete_results": None,
-    "key_skills": None,
-    "missing_requirements": None,
-    "rationale": None,
-    "failure_reason": None,
-}
-
-
 @router.put(
     "/{analysis_id}/job_ad",
     status_code=status.HTTP_202_ACCEPTED,
@@ -509,54 +499,41 @@ def change_job_ad(
             "Annonsen är samma som förut. Inget kördes om.",
         )
     candidates = _candidates(analysis["candidates"])
-    if _state(candidates) == "running":
-        # Annars bedöms en del CV:n mot den gamla texten mitt i bytet.
+    quota = _quota(supabase, user, settings)
+    if any(c.is_running(quota.stale_before) for c in candidates):
+        # Annars bedöms en del CV:n mot den gamla texten mitt i bytet. Ett fastnat CV
+        # körs inte längre och tas om med de andra.
         raise HTTPException(
             status.HTTP_409_CONFLICT,
             "Annonsen kan inte ändras medan analysen körs. Vänta tills den är klar.",
         )
-    quota = _quota(supabase, user, settings)
     _check_quota(quota, candidates, "change_ad")
-    old_ad = analysis["job_ad"]
-
-    def set_ad(new: str, expected: str) -> bool:
-        # Villkorat på den annons vi läste, så två samtidiga ändringar inte båda går igenom.
-        return bool(
-            supabase.table("analysis_batches")
-            .update({"job_ad": new})
-            .eq("id", str(analysis_id))
-            .eq("job_ad", expected)
+    try:
+        # Bytet, tömningen och anspråket sker i en transaktion i databasen (#30), så en
+        # samtidig körning aldrig tar CV:n med den gamla annonsen mitt i bytet.
+        rows = (
+            supabase.rpc(
+                "change_job_ad",
+                {
+                    "p_analysis_id": str(analysis_id),
+                    "p_expected_ad": analysis["job_ad"],
+                    "p_new_ad": job_ad,
+                    "p_stale_before": quota.stale_before.isoformat(),
+                    "p_now": datetime.now(UTC).isoformat(),
+                },
+            )
             .execute()
             .data
         )
-
-    if not set_ad(job_ad, old_ad):
+    except APIError as e:
+        if "job_ad_conflict" not in (e.message or ""):
+            raise
         raise HTTPException(
             status.HTTP_409_CONFLICT,
             "Analysen ändrades samtidigt från ett annat håll. Ladda om sidan och försök igen.",
-        )
+        ) from None
     analysis["job_ad"] = job_ad
-    try:
-        # Atomärt anspråk som i /run: ett CV som redan körs tas inte en gång till.
-        claimed = _candidates(
-            supabase.table("candidates")
-            .update(
-                {
-                    "status": "queued",
-                    "step": None,
-                    "last_progress_at": datetime.now(UTC).isoformat(),
-                    **CLEARED_ASSESSMENT,
-                }
-            )
-            .eq("analysis_id", str(analysis_id))
-            .not_.in_("status", list(IN_FLIGHT))
-            .execute()
-            .data
-        )
-    except Exception:
-        # Annars står den nya annonsen kvar ovanpå bedömningar mot den gamla.
-        set_ad(old_ad, job_ad)
-        raise
+    claimed = _candidates(rows)
     claimed_ids = {c.id for c in claimed}
     candidates = claimed + [c for c in candidates if c.id not in claimed_ids]
     background.add_task(
