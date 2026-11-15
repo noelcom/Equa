@@ -1,6 +1,6 @@
 # 0009 – Avslöjande med sparad identitet
 
-Status: accepterad. Ersätter delar av 0007 (vad som sparas, exporten, att avslöjanden inte loggas).
+Status: accepterad. Ersätter delar av 0007 (vad som sparas, exporten, att avslöjanden inte loggas). Loggningen förtydligas i 0010.
 
 ## Beslut
 - Rekryteraren läser anonymt och avslöjar en kandidat i taget, efter en bekräftelse. Ett avslöjande går inte att ångra och ligger kvar även om analysen körs om.

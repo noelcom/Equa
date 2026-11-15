@@ -50,7 +50,7 @@ Format: **Svensk term** (kodnamn) – definition. _Undvik:_ synonymer vi inte an
 
 ## Data och gränser
 
-**Avslöja** (`reveal`) – rekryteraren väljer medvetet att se vem en kandidat är: namn, e-post och telefon. Görs för en kandidat i taget, efter en bekräftelse, och går inte att ångra, inte heller när analysen körs om. Gäller både bedömda och misslyckade kandidater, men aldrig efter raderingsdatum. Kandidaten är sedan **avslöjad**: identiteten syns i listan bredvid aliaset, tillsammans med när avslöjandet gjordes, och först då går originalfilen att ladda ner. I gränssnittet: "Visa vem det är".
+**Avslöja** (`reveal`) – rekryteraren väljer medvetet att se vem en kandidat är: namn, e-post och telefon. Görs för en kandidat i taget, efter en bekräftelse, och går inte att ångra, inte heller när analysen körs om. Gäller både bedömda och misslyckade kandidater, men aldrig efter raderingsdatum. Kandidaten är sedan **avslöjad**: identiteten syns i listan bredvid aliaset, tillsammans med när avslöjandet gjordes, och först då går originalfilen att ladda ner. Tidpunkten är det enda spåret av avslöjandet. I gränssnittet: "Visa vem det är".
 
 **Raderingsdatum** (`expires_at`, TTL) – när analysen och dess originalfiler raderas automatiskt. Standard 7 dagar, valbart eget datum. Taket är 90 dagar från den dag datumet sätts, så kunden kan förlänga aktivt hur många gånger som helst. Raderingen går igenom även mitt i en körning.
 

@@ -1,6 +1,6 @@
 # 0007 – GDPR-roller och radering, med rullande tak
 
-Status: accepterad. Ersätter 0004. Delvis ersatt av 0009 (vad som sparas, exporten, avslöjanden).
+Status: accepterad. Ersätter 0004. Delvis ersatt av 0009 (vad som sparas, exporten, avslöjanden) och 0010 (loggning av avslöjanden).
 
 ## Beslut
 - Equa är personuppgiftsbiträde, kunden är personuppgiftsansvarig. Anthropic och Supabase är underbiträden. Pilotkunder signerar ett personuppgiftsbiträdesavtal (DPA) före konto.
