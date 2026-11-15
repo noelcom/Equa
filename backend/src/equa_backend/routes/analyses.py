@@ -579,7 +579,7 @@ def export_analysis(
     user: Annotated[CurrentUser, Depends(get_current_user)],
     supabase: Annotated[Client, Depends(get_supabase)],
 ) -> Response:
-    """Excel med anonym alias och bedömning. Originalfilnamn finns aldrig med."""
+    """Excel med alias och bedömning, samt identitet för avslöjade. Originalfilnamn finns aldrig med."""
     # Filtrerar på user_id: bara ägaren kan exportera, andras analyser ser ut som att de inte finns.
     analysis = _own_analysis(supabase, user, analysis_id)
     candidates = _candidates(analysis["candidates"])
@@ -591,7 +591,7 @@ def export_analysis(
         )
     ranked = sorted(candidates, key=_rank_key)
     return Response(
-        content=build_workbook(ranked, _alias),
+        content=build_workbook(ranked, _alias, _identity_of),
         media_type=XLSX_MEDIA_TYPE,
         headers={"Content-Disposition": 'attachment; filename="Equa-analys.xlsx"'},
     )

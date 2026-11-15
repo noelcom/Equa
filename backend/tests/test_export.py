@@ -139,7 +139,7 @@ def test_export_text_that_looks_like_a_formula_stays_text(
     res = _export(client, user, analysis["id"])
 
     sheet = load_workbook(io.BytesIO(res.content)).active
-    cell = next(c for row in sheet.iter_rows(min_row=2) for c in row if c.column == 5)
+    cell = next(c for row in sheet.iter_rows(min_row=2) for c in row if c.column == 8)
     assert cell.data_type == "s"
     assert cell.value.startswith("=HYPERLINK")
 
@@ -163,3 +163,55 @@ def test_export_requires_login(client, make_user):
     res = client.get(f"/analyses/{analysis['id']}/export")
 
     assert res.status_code == 401
+
+
+def _reveal(client, user, analysis_id, number):
+    res = client.post(
+        f"/analyses/{analysis_id}/candidates/{number}/reveal", headers=user.auth
+    )
+    assert res.status_code == 200, res.text
+
+
+def test_export_shows_identity_only_for_revealed_candidates(
+    client, make_user, anthropic_fake
+):
+    anthropic_fake.names = ["Anna Andersson"]
+    user = make_user()
+    body = "Anna Andersson\nanna@example.com\n070-123 45 67\nKodare\nPOÄNG %d"
+    analysis = _analysis(
+        client,
+        user,
+        [("a.pdf", cv(body % 90)), ("b.pdf", cv(body % 40))],
+    )
+    _run(client, user, analysis["id"])
+    _reveal(client, user, analysis["id"], 1)
+
+    res = _export(client, user, analysis["id"])
+
+    header, rows = _rows(res)
+    assert header[:4] == ["Kandidat", "Namn", "E-post", "Telefon"]
+    revealed, hidden = rows
+    assert revealed["Kandidat"] == "Kandidat #1"
+    assert revealed["Namn"] == "Anna Andersson"
+    assert revealed["E-post"] == "anna@example.com"
+    assert revealed["Telefon"] == "070-123 45 67"
+    assert hidden["Namn"] is None
+    assert hidden["E-post"] is None
+    assert hidden["Telefon"] is None
+
+
+def test_export_identity_that_looks_like_a_formula_stays_text(
+    client, make_user, anthropic_fake
+):
+    user = make_user()
+    analysis = _analysis(client, user, [("cv.pdf", cv("=1+1@x.se\nKodare\nPOÄNG 70"))])
+    _run(client, user, analysis["id"])
+    _reveal(client, user, analysis["id"], 1)
+
+    res = _export(client, user, analysis["id"])
+
+    sheet = load_workbook(io.BytesIO(res.content)).active
+    cells = [
+        c for row in sheet.iter_rows(min_row=2) for c in row if c.column in (2, 3, 4)
+    ]
+    assert all(c.data_type == "s" for c in cells if c.value is not None)
