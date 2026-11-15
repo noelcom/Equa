@@ -277,3 +277,36 @@ def test_candidate_without_stored_identity_is_not_extracted(
         "email": None,
         "phone": None,
     }
+
+
+def test_ad_change_keeps_the_revealed_and_does_not_reveal_the_others(
+    client, make_user, anthropic_fake
+):
+    anthropic_fake.names = [NAME]
+    user = make_user()
+    analysis = _create(
+        client,
+        user,
+        [
+            ("a.pdf", cv(f"{NAME}\nUtvecklare.\nPOÄNG 70")),
+            ("b.pdf", cv(f"{NAME}\nTestare.\nPOÄNG 60")),
+        ],
+    )
+    analysis_id = analysis["id"]
+    _run(client, user, analysis_id)
+    first = _reveal(client, user, analysis_id, 1).json()
+
+    res = client.put(
+        f"/analyses/{analysis_id}/job_ad",
+        headers=user.auth,
+        json={"job_ad": "En helt ny annons."},
+    )
+    assert res.status_code == 202, res.text
+
+    candidates = _get(client, user, analysis_id).json()["candidates"]
+    by_number = {c["number"]: c for c in candidates}
+    assert by_number[1]["revealed_at"] == first["revealed_at"]
+    assert by_number[1]["identity"]["name"] == NAME
+    assert by_number[2]["revealed_at"] is None
+    assert by_number[2].get("identity") is None
+    assert all(c["status"] == "done" for c in candidates)
