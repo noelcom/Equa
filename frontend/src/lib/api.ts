@@ -143,6 +143,13 @@ export async function revealCandidate(analysisId: string, number: number): Promi
   return res.json();
 }
 
+// Originalfilen låses upp av avslöjandet. Filnamnet är det anonyma aliaset.
+export async function downloadOriginal(analysisId: string, number: number): Promise<void> {
+  const res = await authedFetch(`/analyses/${analysisId}/candidates/${number}/original`);
+  if (!res.ok) throw new Error(await errorMessage(res, "Kunde inte ladda ner originalfilen"));
+  await downloadBlob(res, `Kandidat-${number}.pdf`);
+}
+
 // Excel med anonym alias och bedömning. Originalfilnamn finns aldrig med.
 export async function exportAnalysis(analysisId: string): Promise<void> {
   const res = await authedFetch(`/analyses/${analysisId}/export`);

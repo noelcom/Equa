@@ -634,15 +634,15 @@ def reveal(
 
 
 @router.get("/{analysis_id}/candidates/{number}/original")
-def reveal_candidate(
+def download_original(
     analysis_id: uuid.UUID,
     number: int,
     user: Annotated[CurrentUser, Depends(get_current_user)],
     supabase: Annotated[Client, Depends(get_supabase)],
 ) -> Response:
-    """Avslöja: originalfilen för en kandidat. Det enda sättet identiteten visas.
+    """Originalfilen för en kandidat. Låses upp av avslöjandet (ADR 0009).
 
-    Avslöjanden loggas medvetet inte (ADR 0007).
+    Nedladdningar loggas inte.
     """
     analysis = _live_analysis(supabase, user, analysis_id)
     candidate = next(
@@ -650,6 +650,8 @@ def reveal_candidate(
     )
     if candidate is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Kandidaten finns inte.")
+    if candidate.revealed_at is None:
+        raise HTTPException(status.HTTP_409_CONFLICT, "Kandidaten är inte avslöjad.")
     try:
         data = supabase.storage.from_(BUCKET).download(candidate.original_path)
     except StorageException:

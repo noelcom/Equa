@@ -1,4 +1,4 @@
-"""Avslöja: rekryteraren laddar ner originalfilen för en vald kandidat (ADR 0007)."""
+"""Originalfilen går bara att ladda ner för en avslöjad kandidat (ADR 0007, 0009)."""
 
 import logging
 
@@ -16,7 +16,16 @@ def _create(client, user, files):
     return res.json()
 
 
-def _reveal(client, user, analysis_id, number):
+def _reveal_and_download(client, user, analysis_id, number):
+    """Avslöjar kandidaten och laddar sedan ner originalfilen."""
+    client.post(
+        f"/analyses/{analysis_id}/candidates/{number}/reveal", headers=user.auth
+    )
+    # Nedladdningen prövas alltid, även när avslöjandet nekas (annan användare, okänd kandidat).
+    return _download(client, user, analysis_id, number)
+
+
+def _download(client, user, analysis_id, number):
     return client.get(
         f"/analyses/{analysis_id}/candidates/{number}/original", headers=user.auth
     )
@@ -29,7 +38,7 @@ def test_reveal_downloads_the_original_file_of_the_chosen_candidate(client, make
         client, user, [("anna-andersson.pdf", first), ("bo-berg.pdf", second)]
     )
 
-    res = _reveal(client, user, analysis["id"], 2)
+    res = _reveal_and_download(client, user, analysis["id"], 2)
 
     assert res.status_code == 200
     assert res.headers["content-type"] == "application/pdf"
@@ -42,7 +51,7 @@ def test_another_user_cannot_reveal_the_candidate(client, make_user):
     owner, other = make_user(), make_user()
     analysis = _create(client, owner, [("cv.pdf", make_pdf("Hemligt CV"))])
 
-    res = _reveal(client, other, analysis["id"], 1)
+    res = _reveal_and_download(client, other, analysis["id"], 1)
 
     # Andras analyser ser ut som att de inte finns.
     assert res.status_code == 404
@@ -62,7 +71,7 @@ def test_reveal_of_unknown_candidate_is_404(client, make_user):
     user = make_user()
     analysis = _create(client, user, [("cv.pdf", make_pdf("CV"))])
 
-    assert _reveal(client, user, analysis["id"], 2).status_code == 404
+    assert _reveal_and_download(client, user, analysis["id"], 2).status_code == 404
 
 
 def test_reveal_is_not_logged(client, make_user, caplog):
@@ -71,7 +80,7 @@ def test_reveal_is_not_logged(client, make_user, caplog):
     caplog.clear()
 
     with caplog.at_level(logging.DEBUG, logger="equa_backend"):
-        res = _reveal(client, user, analysis["id"], 1)
+        res = _reveal_and_download(client, user, analysis["id"], 1)
 
     assert res.status_code == 200
     assert [r for r in caplog.records if r.name.startswith("equa_backend")] == []
@@ -89,7 +98,7 @@ def test_reveal_of_already_deleted_original_is_404(client, make_user, admin):
     )
     admin.storage.from_("originals").remove([path])
 
-    res = _reveal(client, user, analysis["id"], 1)
+    res = _reveal_and_download(client, user, analysis["id"], 1)
 
     assert res.status_code == 404
 
@@ -103,7 +112,29 @@ def test_reveal_after_expiry_date_is_404_as_for_other_expired_calls(
         {"expires_at": "2000-01-01T00:00:00+00:00"}
     ).eq("id", analysis["id"]).execute()
 
-    res = _reveal(client, user, analysis["id"], 1)
+    res = _reveal_and_download(client, user, analysis["id"], 1)
 
     assert res.status_code == 404
     assert res.json() == {"detail": "Analysen finns inte."}
+
+
+def test_download_of_unrevealed_candidate_is_409(client, make_user):
+    user = make_user()
+    analysis = _create(client, user, [("cv.pdf", make_pdf("Hemligt CV"))])
+
+    res = _download(client, user, analysis["id"], 1)
+
+    assert res.status_code == 409
+    assert res.json() == {"detail": "Kandidaten är inte avslöjad."}
+    assert b"Hemligt" not in res.content
+
+
+def test_download_only_unlocks_for_the_revealed_candidate(client, make_user):
+    user = make_user()
+    analysis = _create(
+        client, user, [("a.pdf", make_pdf("Första")), ("b.pdf", make_pdf("Andra"))]
+    )
+    client.post(f"/analyses/{analysis['id']}/candidates/1/reveal", headers=user.auth)
+
+    assert _download(client, user, analysis["id"], 1).status_code == 200
+    assert _download(client, user, analysis["id"], 2).status_code == 409

@@ -6,6 +6,7 @@ import {
   changeJobAd,
   createAnalysis,
   deleteAnalysis,
+  downloadOriginal,
   exportAnalysis,
   extendAnalysis,
   getAnalysis,
@@ -716,6 +717,17 @@ function RankedCandidate({
               <dd>{contactValue(identity, identity?.phone)}</dd>
             </dl>
             <p className="mt-1 text-zinc-600">Avslöjad {formatDate(revealedAt)}</p>
+            <button
+              onClick={() => {
+                setError(null);
+                downloadOriginal(analysisId, candidate.number).catch((e: Error) =>
+                  setError(e.message),
+                );
+              }}
+              className="mt-3 rounded border border-zinc-300 px-3 py-1 text-sm"
+            >
+              Ladda ner originalfilen
+            </button>
           </div>
         ) : (
           <button
