@@ -43,7 +43,11 @@ class Candidate(BaseModel):
         )
 
     def is_running(self, stale_before: datetime) -> bool:
-        """Körs just nu: i gång och inte fastnat. Ett fastnat CV körs inte längre."""
+        """Körs just nu: i gång och inte fastnat. Ett fastnat CV körs inte längre.
+
+        Till skillnad från analysens `state == "running"`, där ett fastnat CV räknas med.
+        Annonsen går att ändra så länge inget CV körs i den här meningen.
+        """
         return self.status in IN_FLIGHT and not self.is_stale(stale_before)
 
     def is_runnable(self, stale_before: datetime) -> bool:

@@ -19,8 +19,11 @@ returns setof public.candidates
 language plpgsql
 as $$
 begin
-  perform 1 from public.candidates where analysis_id = p_analysis_id for update;
+  -- Låser i id-ordning, så två anrop som låser samma rader inte låser sig i kors.
+  perform 1 from public.candidates where analysis_id = p_analysis_id order by id for update;
 
+  -- Statuslistan speglar IN_FLIGHT i backend/candidates.py, och villkoret om framsteg är
+  -- negationen av Candidate.is_stale. Ändras det ena måste det andra ändras.
   if exists (
     select 1 from public.candidates
     where analysis_id = p_analysis_id
@@ -39,6 +42,7 @@ begin
   end if;
 
   -- Tömmer bedömningen, så ingen gammal poäng står kvar mot en annons som inte gäller.
+  -- Kolumnlistan är samma som bedömningsfälten i Candidate: en ny bedömningskolumn läggs till här.
   -- Identiteten och revealed_at rörs inte: ett avslöjande består (ADR 0009).
   return query
     with claimed as (
