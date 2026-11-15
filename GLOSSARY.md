@@ -20,9 +20,9 @@ Format: **Svensk term** (kodnamn) – definition. _Undvik:_ synonymer vi inte an
 
 **Arbetsannons** (`job_ad`) – texten rekryteraren klistrar in. Allt bedöms mot den. Kan ändras när ingen körning pågår. Då körs alla analysens CV:n om mot den nya texten direkt, och de gamla bedömningarna försvinner, så ingen bedömning finns mot en annons som inte längre gäller. Ändringen görs bara om kvoten räcker till alla. Bara den senaste annonsen sparas.
 
-**Anonym alias** (`anonymous_alias`) – "Kandidat #N". Det enda namn som syns i gränssnitt och export.
+**Anonym alias** (`anonymous_alias`) – "Kandidat #N". Det enda namn som syns tills kandidaten avslöjas.
 
-**Excel-export** – analysen som xlsx: en rad per kandidat med alias, status, poäng och bedömning, bedömda först. Originalfilnamn finns aldrig med. Bara ägaren kan exportera, och först när hela analysen är klar (inget CV uppladdat, köat eller under bearbetning).
+**Excel-export** – analysen som xlsx: en rad per kandidat med alias, status, poäng och bedömning, bedömda först. Avslöjade kandidater har också namn, e-post och telefon; för övriga är de tomma. Originalfilnamn finns aldrig med. Bara ägaren kan exportera, och först när hela analysen är klar (inget CV uppladdat, köat eller under bearbetning).
 
 **Leaderboard** – alla kandidater i en analys, sorterade efter poäng. Ingen kandidat filtreras bort. Misslyckade CV:n visas i en egen sektion.
 
@@ -50,7 +50,7 @@ Format: **Svensk term** (kodnamn) – definition. _Undvik:_ synonymer vi inte an
 
 ## Data och gränser
 
-**Avslöja** (`reveal`) – rekryteraren laddar ner originalfilen för en vald kandidat. Det enda sättet identiteten visas. Loggas inte.
+**Avslöja** (`reveal`) – rekryteraren väljer medvetet att se vem en kandidat är: namn, e-post och telefon. Görs för en kandidat i taget, efter en bekräftelse, och går inte att ångra, inte heller när analysen körs om. Gäller både bedömda och misslyckade kandidater, men aldrig efter raderingsdatum. Kandidaten är sedan **avslöjad**: identiteten syns i listan bredvid aliaset, tillsammans med när avslöjandet gjordes, och först då går originalfilen att ladda ner. I gränssnittet: "Visa vem det är".
 
 **Raderingsdatum** (`expires_at`, TTL) – när analysen och dess originalfiler raderas automatiskt. Standard 7 dagar, valbart eget datum. Taket är 90 dagar från den dag datumet sätts, så kunden kan förlänga aktivt hur många gånger som helst. Raderingen går igenom även mitt i en körning.
 
