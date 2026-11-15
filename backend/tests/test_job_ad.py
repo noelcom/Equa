@@ -229,3 +229,68 @@ def test_analysis_tells_whether_the_ad_can_be_changed_right_now(
 
     _stick(admin, analysis, "processing", minutes_ago=60)
     assert _get(client, user, analysis)["can_change_ad"] is True
+
+
+def test_ad_change_loses_to_a_run_that_claimed_the_cvs_after_it_was_read(
+    client, make_user, admin, anthropic_fake, monkeypatch
+):
+    """En körning som anspråkar CV:n mellan läsningen och bytet får aldrig blanda annonser.
+
+    Körningen startar efter att annonsändringen har läst analysen men före bytet. Då ska
+    ändringen svara 409 och lämna annonsen orörd, så CV:n inte bedöms mot två annonser.
+    """
+    from equa_backend.routes import analyses as routes
+
+    user = make_user()
+    analysis = _analysis(client, user, ["POÄNG 50", "POÄNG 60"])
+    original = routes._quota
+
+    def quota_then_concurrent_run_claims(*args, **kwargs):
+        snapshot = original(*args, **kwargs)
+        monkeypatch.setattr(routes, "_quota", original)
+        # Den samtidiga körningen i den andra fliken har anspråkat CV:n och är i gång.
+        admin.table("candidates").update(
+            {"status": "queued", "last_progress_at": datetime.now(UTC).isoformat()}
+        ).eq("analysis_id", analysis["id"]).execute()
+        return snapshot
+
+    monkeypatch.setattr(routes, "_quota", quota_then_concurrent_run_claims)
+    anthropic_fake.calls.clear()
+
+    res = _change_ad(client, user, analysis, NEW_AD)
+
+    assert res.status_code == 409, res.text
+    assert anthropic_fake.calls == []
+    body = _get(client, user, analysis)
+    assert body["job_ad"] == OLD_AD
+    assert [c["status"] for c in body["candidates"]] == ["queued", "queued"]
+
+
+def test_ad_changed_from_another_tab_gives_409_and_changes_nothing(
+    client, make_user, admin, anthropic_fake, monkeypatch
+):
+    from equa_backend.routes import analyses as routes
+
+    user = make_user()
+    analysis = _analysis(client, user, ["POÄNG 50"])
+    _run(client, user, analysis)
+    original = routes._quota
+
+    def quota_then_other_tab_changes_ad(*args, **kwargs):
+        snapshot = original(*args, **kwargs)
+        monkeypatch.setattr(routes, "_quota", original)
+        admin.table("analysis_batches").update({"job_ad": "Annan flik."}).eq(
+            "id", analysis["id"]
+        ).execute()
+        return snapshot
+
+    monkeypatch.setattr(routes, "_quota", quota_then_other_tab_changes_ad)
+    anthropic_fake.calls.clear()
+
+    res = _change_ad(client, user, analysis, NEW_AD)
+
+    assert res.status_code == 409, res.text
+    assert anthropic_fake.calls == []
+    body = _get(client, user, analysis)
+    assert body["job_ad"] == "Annan flik."
+    assert [c["status"] for c in body["candidates"]] == ["done"]
