@@ -6,6 +6,7 @@ Status: accepterad. Ersätter delar av 0007 (vad som sparas, exporten, att avsl�
 - Rekryteraren läser anonymt och avslöjar en kandidat i taget, efter en bekräftelse. Ett avslöjande går inte att ångra och ligger kvar även om analysen körs om.
 - Ett avslöjande visar namn, e-post och telefon, sparas med tidpunkt och syns i listan. Originalfilen går bara att ladda ner för avslöjade kandidater.
 - Identiteten läses ut redan vid uppladdningen: namnet av AI-tvätten och e-post och telefon av förtvättens regex. Den första träffen av varje sparas.
+- Vid omkörning behålls tidigare sparade fält (namn, e-post, telefon) när utläsningen missar något. En ny träff ersätter den gamla, en miss gör det inte, så en redan avslöjad identitet försvinner aldrig.
 - Identiteten krypteras i backend med en egen nyckel innan den skrivs till databasen. Den skickas aldrig till webbläsaren för en kandidat som inte är avslöjad.
 - Identiteten raderas med analysen, som allt annat.
 - Exporten visar namn, e-post och telefon för avslöjade kandidater.
