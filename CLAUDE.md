@@ -12,6 +12,10 @@ Default five-label vocabulary (needs-triage, needs-info, ready-for-agent, ready-
 
 Single-context: one `GLOSSARY.md` + `docs/adr/` at the repo root. See `docs/agents/domain.md`.
 
+## Design
+
+Innan du bygger eller ändrar UI, läs `DESIGN.md`: tokens, komponenter, layout, rörelse och interaktion. Något nytt som saknas där läggs till där.
+
 ## Kommandon
 
 Starta, testa och linta: `backend/README.md`. Frontend: `npm run check` i `frontend/`.
